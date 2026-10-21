@@ -141,21 +141,59 @@ def mix_voice_with_ducked_bgm(
 
 
 PHASE_MULTIPLIERS = {
-    # Canonical 5 acts (Prototype Evaluation Report)
+    # Canonical 5 acts (economia_cotidiana)
     "promessa": 1.0,     # Full corporate/aspirational hype (100%)
     "objeto": 0.85,      # Transition to product/price tag (85%)
     "bastidores": 0.65,  # Material production / factory / labor (65%)
     "revelacao": 0.30,   # Dry, stripped-back reality (30%)
     "fechamento": 0.10,  # Minimal soundbed or silence (10%)
-
-    # Compatibility aliases
     "aspiration": 1.0,
     "commodity": 0.85,
     "production": 0.65,
     "labor": 0.30,
     "reveal": 0.30,
     "conclusion": 0.10,
+
+    # explicador_cientifico
+    "enigma": 1.0,
+    "mecanismo": 0.80,
+    "experimento": 0.60,
+    "implicacao": 0.35,
+    "conclusao": 0.15,
+
+    # ensaio_documental
+    "tese": 1.0,
+    "contexto": 0.80,
+    "evidencia": 0.60,
+    "analise": 0.35,
+    "sintese": 0.10,
+
+    # internet_retro
+    "hook_pop": 1.0,
+    "desconstrucao": 0.80,
+    "humor_literal": 0.30,
+    "plot_twist": 0.70,
+    "remix": 0.20,
 }
+
+
+def measure_integrated_lufs(audio_path: Union[str, Path]) -> float:
+    """Measures exact integrated loudness (LUFS) of an audio file using FFmpeg ebur128 filter."""
+    src = Path(audio_path).resolve()
+    if not src.exists():
+        raise FileNotFoundError(f"Audio file not found: {src}")
+
+    cmd = [
+        "ffmpeg", "-nostats",
+        "-i", str(src),
+        "-filter_complex", "ebur128=peak=true",
+        "-f", "null", "-",
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    match = re.search(r"Integrated loudness:\s+I:\s+([-\d.]+)\s+LUFS", result.stderr)
+    if match:
+        return float(match.group(1))
+    return -14.0
 
 
 def build_adaptive_volume_expr(
