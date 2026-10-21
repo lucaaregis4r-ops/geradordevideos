@@ -26,7 +26,9 @@ class MediaCandidate:
     license_id: str = ""
     license_url: str = ""
     content_hash: str = ""
+    perceptual_hash: str = ""
     technical_score: float = 0.0
+    visual_quality_score: float = 0.0
     semantic_score: float = 0.0
     final_score: float = 0.0
     category: str = ""
@@ -56,7 +58,9 @@ class MediaCandidate:
             license_id=data.get("license_id", ""),
             license_url=data.get("license_url", ""),
             content_hash=data.get("content_hash", ""),
+            perceptual_hash=data.get("perceptual_hash", ""),
             technical_score=float(data.get("technical_score", 0.0)),
+            visual_quality_score=float(data.get("visual_quality_score", 0.0)),
             semantic_score=float(data.get("semantic_score", 0.0)),
             final_score=float(data.get("final_score", 0.0)),
             category=data.get("category", ""),

@@ -53,7 +53,13 @@ class MediaSearcher:
             self.graphics_engine = GraphicsEngine(cache_dir=self.media_cache_dir / "graphics")
         else:
             self.graphics_engine = graphics_engine
+        from .visual_evaluator import VisualEvaluator
+        self.visual_evaluator = VisualEvaluator(temp_dir=self.media_cache_dir / "eval_frames")
         self.deduplicator = MediaDeduplicator()
+
+    def reset(self) -> None:
+        """Resets deduplicator and internal tracking state between production runs."""
+        self.deduplicator.reset()
 
     def search_for_scene(
         self,
@@ -153,13 +159,12 @@ class MediaSearcher:
                 visual_cat = scene.entities[0] if getattr(scene, "entities", None) else getattr(scene, "narrative_function", "")
 
                 for candidate in candidates:
+                    local_p: Optional[str] = None
+
                     # Check if already local
                     if candidate.local_path and Path(candidate.local_path).exists():
-                        selected_cand = candidate
-                        break
-
-                    # Download if needed
-                    if download_selected and candidate.url:
+                        local_p = candidate.local_path
+                    elif download_selected and candidate.url:
                         try:
                             logger.info("Downloading candidate {} from {} for scene {}", candidate.asset_id, candidate.url, scene.scene_id)
                             downloaded = material.save_video(
@@ -168,8 +173,7 @@ class MediaSearcher:
                             )
                             if downloaded and Path(downloaded).exists():
                                 candidate.local_path = downloaded
-                                selected_cand = candidate
-                                break
+                                local_p = downloaded
                             else:
                                 logger.warning("Download of candidate {} returned invalid path", candidate.asset_id)
                         except Exception as e:
@@ -179,6 +183,51 @@ class MediaSearcher:
                             )
                             candidate.error_detail = str(e)
                     elif not download_selected:
+                        selected_cand = candidate
+                        break
+
+                    # Validate local file visually and check perceptual duplication
+                    if local_p:
+                        try:
+                            metrics = self.visual_evaluator.evaluate_media(
+                                local_p,
+                                media_type=candidate.media_type,
+                                duration=candidate.duration or duration,
+                            )
+                            if not metrics.is_valid:
+                                if metrics.rejection_reason in (
+                                    "excessive_black_frames",
+                                    "low_contrast_flat_media",
+                                    "corrupted_image",
+                                ):
+                                    logger.warning(
+                                        "Candidate {} rejected by visual evaluator: {}",
+                                        candidate.asset_id, metrics.rejection_reason
+                                    )
+                                    candidate.error_detail = metrics.rejection_reason
+                                    continue
+                                else:
+                                    logger.debug(
+                                        "Candidate {} visual evaluation non-fatal: {}",
+                                        candidate.asset_id, metrics.rejection_reason
+                                    )
+
+                            candidate.perceptual_hash = metrics.perceptual_hash
+                            candidate.visual_quality_score = metrics.quality_score
+                        except Exception as e:
+                            logger.debug("Visual evaluation skipped for {}: {}", candidate.asset_id, e)
+
+                        # Perceptual duplicate check against already chosen assets in this production
+                        if candidate.perceptual_hash and not getattr(scene, "intentional_callback", None):
+                            dup = self.deduplicator.find_perceptual_duplicate(candidate.perceptual_hash)
+                            if dup:
+                                logger.warning(
+                                    "Candidate {} is perceptual duplicate of asset {} in scene {} (dist={})",
+                                    candidate.asset_id, dup[0], dup[1], dup[2]
+                                )
+                                candidate.error_detail = f"perceptual_duplicate_of_{dup[0]}"
+                                continue
+
                         selected_cand = candidate
                         break
 

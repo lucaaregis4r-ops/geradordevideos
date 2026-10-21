@@ -91,6 +91,9 @@ class ShortsFactory:
         project_folder = self.projects_dir / script_id
         project_folder.mkdir(parents=True, exist_ok=True)
 
+        # Reset media searcher deduplication state for this production run
+        self.searcher.reset()
+
         # 1. Direct Script (Saves script_v00X and generates ScenePlan)
         if on_progress:
             on_progress("Directing script into visual scenes...", 0.20)

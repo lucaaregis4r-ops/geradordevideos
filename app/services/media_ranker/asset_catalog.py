@@ -101,6 +101,7 @@ class AssetCatalog:
                     height INTEGER,
                     duration REAL,
                     content_hash TEXT,
+                    perceptual_hash TEXT,
                     local_path TEXT,
                     source_page TEXT,
                     creator_name TEXT,
@@ -113,8 +114,15 @@ class AssetCatalog:
                 );
                 """
             )
+            try:
+                conn.execute("ALTER TABLE assets ADD COLUMN perceptual_hash TEXT;")
+            except Exception:
+                pass  # Column already exists
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_assets_hash ON assets(content_hash);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_assets_phash ON assets(perceptual_hash);"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_assets_provider ON assets(provider, provider_asset_id);"
@@ -142,11 +150,28 @@ class AssetCatalog:
             self.record_usage(existing["asset_id"])
             candidate.asset_id = existing["asset_id"]
             candidate.content_hash = content_hash
+            candidate.perceptual_hash = existing.get("perceptual_hash") or candidate.perceptual_hash
             candidate.width = existing["width"]
             candidate.height = existing["height"]
             candidate.duration = existing["duration"]
             candidate.local_path = existing["local_path"]
             return candidate
+
+        # Extract perceptual hash and visual metrics if not already present
+        if not candidate.perceptual_hash:
+            try:
+                from .visual_evaluator import VisualEvaluator
+                evaluator = VisualEvaluator()
+                metrics = evaluator.evaluate_media(
+                    local_file,
+                    media_type=candidate.media_type,
+                    duration=dur,
+                )
+                if metrics.perceptual_hash:
+                    candidate.perceptual_hash = metrics.perceptual_hash
+                candidate.visual_quality_score = metrics.quality_score
+            except Exception as e:
+                logger.debug("Visual evaluation during registration skipped: {}", e)
 
         candidate.content_hash = content_hash
         candidate.width = w
@@ -163,12 +188,12 @@ class AssetCatalog:
                 """
                 INSERT OR REPLACE INTO assets (
                     asset_id, provider, provider_asset_id, media_type,
-                    width, height, duration, content_hash, local_path,
+                    width, height, duration, content_hash, perceptual_hash, local_path,
                     source_page, creator_name, creator_url, license_id, license_url,
                     last_used_at, use_count
                 ) VALUES (
                     ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?,
                     CURRENT_TIMESTAMP,
                     COALESCE((SELECT use_count + 1 FROM assets WHERE asset_id = ?), 1)
@@ -183,6 +208,7 @@ class AssetCatalog:
                     h,
                     candidate.duration,
                     content_hash,
+                    candidate.perceptual_hash,
                     candidate.local_path,
                     candidate.source_page,
                     candidate.creator_name,
@@ -195,8 +221,8 @@ class AssetCatalog:
             conn.commit()
 
         logger.info(
-            "Registered asset {} into catalog: {}x{} dur={:.1f}s hash={}",
-            asset_id, w, h, candidate.duration, content_hash[:8]
+            "Registered asset {} into catalog: {}x{} dur={:.1f}s hash={} phash={}",
+            asset_id, w, h, candidate.duration, content_hash[:8], candidate.perceptual_hash[:8]
         )
         return candidate
 
@@ -211,6 +237,24 @@ class AssetCatalog:
             cur = conn.execute("SELECT * FROM assets WHERE content_hash = ?", (content_hash,))
             row = cur.fetchone()
             return dict(row) if row else None
+
+    def get_by_perceptual_hash(
+        self, perceptual_hash: str, max_distance: int = 8
+    ) -> Optional[Dict[str, Any]]:
+        """Finds an existing asset in the catalog whose perceptual hash is within max_distance."""
+        if not perceptual_hash:
+            return None
+        from .perceptual_hash import hamming_distance
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                "SELECT * FROM assets WHERE perceptual_hash IS NOT NULL AND perceptual_hash != '';"
+            )
+            for row in cur.fetchall():
+                row_dict = dict(row)
+                row_phash = row_dict.get("perceptual_hash") or ""
+                if row_phash and hamming_distance(perceptual_hash, row_phash) <= max_distance:
+                    return row_dict
+        return None
 
     def record_usage(self, asset_id: str) -> None:
         with self._get_connection() as conn:

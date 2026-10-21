@@ -74,6 +74,7 @@ class QualityScore:
     low_resolution_count: int = 0
     segments_without_visual: int = 0
     synthetic_assets: int = 0
+    consecutive_treatment_violations: int = 0
     passed: bool = False
     alerts: list[str] = field(default_factory=list)
 

@@ -23,6 +23,7 @@ DEFAULT_THRESHOLDS = {
     "max_low_resolution": 2,
     "min_semantic_match_avg": 0.4,
     "max_synthetic_assets": 0,
+    "max_consecutive_same_treatment": 3,
 }
 
 
@@ -48,6 +49,7 @@ class QualityChecker:
             low_resolution_count=0,    # Placeholder — needs asset metadata
             segments_without_visual=self._count_missing_visuals(plan),
             synthetic_assets=self._count_synthetic_assets(plan),
+            consecutive_treatment_violations=self._check_consecutive_treatments(plan),
         )
 
         # Determine pass/fail
@@ -95,11 +97,37 @@ class QualityChecker:
             return 0.0
         return round(sum(scores) / len(scores), 3)
 
-    def _compute_diversity(self, plan: AssemblyPlan) -> float:
-        """Visual diversity score: ratio of unique asset types and categories.
+    def _check_consecutive_treatments(self, plan: AssemblyPlan) -> int:
+        """Counts instances where more than max_consecutive segments share the same visual treatment.
 
-        A video with all stock_video segments scores low; mixing video,
-        photo, graphic, text_card, etc. scores high.
+        Deliberate callbacks are exempted from being penalized as involuntary monotony.
+        """
+        max_consecutive = self.thresholds.get("max_consecutive_same_treatment", 3)
+        if not plan.segments or len(plan.segments) <= max_consecutive:
+            return 0
+
+        violations = 0
+        current_type = plan.segments[0].asset_type
+        run_len = 1
+        for s in plan.segments[1:]:
+            if s.is_callback:
+                current_type = s.asset_type
+                run_len = 1
+                continue
+            if s.asset_type == current_type:
+                run_len += 1
+                if run_len > max_consecutive:
+                    violations += 1
+            else:
+                current_type = s.asset_type
+                run_len = 1
+        return violations
+
+    def _compute_diversity(self, plan: AssemblyPlan) -> float:
+        """Visual diversity score using temporal sliding windows and treatment variety.
+
+        Prevents longer videos from being unfairly penalized: calculates local variety
+        across temporal sliding windows of size 4.
         """
         if not plan.segments:
             return 0.0
@@ -107,11 +135,23 @@ class QualityChecker:
         types = [s.asset_type for s in plan.segments]
         purposes = [s.purpose for s in plan.segments]
 
-        type_diversity = len(set(types)) / max(len(types), 1)
-        purpose_diversity = len(set(purposes)) / max(len(purposes), 1)
+        # 1. Overall variety relative to expected mix
+        type_variety = min(1.0, len(set(types)) / 3.0)
+        purpose_variety = min(1.0, len(set(purposes)) / 3.0)
 
-        # Weighted: type variety matters more
-        return round(0.6 * type_diversity + 0.4 * purpose_diversity, 3)
+        # 2. Temporal sliding window variety
+        window_size = min(4, len(types))
+        if window_size > 1:
+            window_scores = []
+            for i in range(len(types) - window_size + 1):
+                win = types[i : i + window_size]
+                window_scores.append(len(set(win)) / window_size)
+            temporal_score = sum(window_scores) / len(window_scores)
+        else:
+            temporal_score = 1.0
+
+        score = 0.50 * temporal_score + 0.30 * type_variety + 0.20 * purpose_variety
+        return round(min(1.0, max(0.0, score)), 3)
 
     def _count_missing_visuals(self, plan: AssemblyPlan) -> int:
         """Counts segments with no valid asset path."""
@@ -144,6 +184,12 @@ class QualityChecker:
             alerts.append(
                 f"visual_diversity={score.visual_diversity:.2f} "
                 f"(min={self.thresholds['min_visual_diversity']})"
+            )
+
+        if score.consecutive_treatment_violations > self.thresholds.get("max_consecutive_treatment_violations", 0):
+            alerts.append(
+                f"consecutive_treatment_violations={score.consecutive_treatment_violations} "
+                f"(max={self.thresholds.get('max_consecutive_treatment_violations', 0)})"
             )
 
         if score.segments_without_visual > self.thresholds["max_segments_without_visual"]:

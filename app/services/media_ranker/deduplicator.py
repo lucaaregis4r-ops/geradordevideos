@@ -12,14 +12,20 @@ Extended in v0.2 with:
 
 from __future__ import annotations
 from collections import defaultdict
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
+from .perceptual_hash import hamming_distance
 from .schemas import MediaCandidate
 
 
 class MediaDeduplicator:
-    def __init__(self):
+    def __init__(self, project_id: Optional[str] = None):
+        self.project_id = project_id
         self._global_seen_assets: Set[str] = set()
+        # Perceptual hash tracking: list of (phash, asset_key, scene_id)
+        self._seen_perceptual_hashes: List[Tuple[str, str, str]] = []
+        # Creator diversity tracking (max 2 assets per author across the video)
+        self._creator_usage: Dict[str, int] = defaultdict(int)
         # Track which visual categories have been used and how recently
         self._category_usage: Dict[str, int] = defaultdict(int)
         # Track per-scene assignments for callback detection
@@ -50,25 +56,38 @@ class MediaDeduplicator:
         fresh = [c for c in candidates if (c.asset_id or c.url) not in self._global_seen_assets]
         return fresh if fresh else candidates
 
+    def find_perceptual_duplicate(
+        self, phash: str, max_distance: int = 8
+    ) -> Optional[Tuple[str, str, int]]:
+        """Checks if a perceptual hash is close to any previously selected asset.
+
+        Returns (seen_asset_key, seen_scene_id, distance) if found, else None.
+        """
+        if not phash:
+            return None
+        for seen_hash, seen_key, seen_scene in self._seen_perceptual_hashes:
+            dist = hamming_distance(phash, seen_hash)
+            if dist <= max_distance:
+                return (seen_key, seen_scene, dist)
+        return None
+
     def score_candidates(
         self,
         candidates: List[MediaCandidate],
         visual_category: str = "",
         intentional_callback: Optional[str] = None,
+        max_perceptual_distance: int = 8,
     ) -> List[MediaCandidate]:
         """Applies graduated repetition penalties to candidate scores.
 
         Penalty tiers:
         - Exact asset reuse:         final_score *= 0.1   (near-zero)
+        - Perceptual duplicate:      final_score *= 0.05  (visually identical clip)
+        - Creator cap (>=2 uses):    final_score *= 0.2   (author variety rule)
         - Same visual category:      final_score *= 0.5   (discouraged)
         - Blocked asset:             filtered out entirely
 
         Intentional callbacks bypass all penalties.
-
-        Args:
-            candidates: Pre-ranked candidates with final_score already set.
-            visual_category: The semantic category of the current scene (e.g. "factory", "money").
-            intentional_callback: If set, the scene_id whose asset should be reused.
         """
         if intentional_callback and intentional_callback in self._scene_asset_map:
             # Callback mode: promote the exact asset from the referenced scene
@@ -87,11 +106,19 @@ class MediaDeduplicator:
             if key in self._blocked_assets:
                 continue
 
-            # Exact reuse penalty
+            # 1. Exact reuse penalty
             if key in self._global_seen_assets:
                 c.final_score *= 0.1
 
-            # Category similarity penalty: applies if candidate matches the used category
+            # 2. Perceptual duplicate penalty
+            elif c.perceptual_hash and self.find_perceptual_duplicate(c.perceptual_hash, max_distance=max_perceptual_distance):
+                c.final_score *= 0.05
+
+            # 3. Creator diversity penalty (Hard Constraint 3: max 2 assets per author across video)
+            elif c.creator_name and self._creator_usage.get(c.creator_name.lower(), 0) >= 2:
+                c.final_score *= 0.2
+
+            # 4. Category similarity penalty: applies if candidate matches the used category
             elif visual_category and self._category_usage.get(visual_category, 0) > 0:
                 cand_cat = getattr(c, "category", "") or ""
                 is_same_category = (
@@ -120,6 +147,14 @@ class MediaDeduplicator:
         if key:
             self._global_seen_assets.add(key)
 
+        if candidate.perceptual_hash:
+            self._seen_perceptual_hashes.append(
+                (candidate.perceptual_hash, key or "", scene_id)
+            )
+
+        if candidate.creator_name:
+            self._creator_usage[candidate.creator_name.lower()] += 1
+
         if scene_id:
             self._scene_asset_map[scene_id] = key or ""
 
@@ -137,6 +172,8 @@ class MediaDeduplicator:
     def reset(self) -> None:
         """Clears all tracking state (use between separate video productions)."""
         self._global_seen_assets.clear()
+        self._seen_perceptual_hashes.clear()
+        self._creator_usage.clear()
         self._category_usage.clear()
         self._scene_asset_map.clear()
         self._blocked_assets.clear()

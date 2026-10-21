@@ -15,6 +15,51 @@ from .schemas import MediaCandidate
 from .thumbnailer import Thumbnailer
 
 
+BILINGUAL_LEXICON: Dict[str, set[str]] = {
+    # Clothing / Retail
+    "shirt": {"camiseta", "camisa", "roupa"},
+    "tshirt": {"camiseta", "camisa"},
+    "clothing": {"roupa", "vestuário", "peça"},
+    "clothes": {"roupa", "roupas"},
+    "store": {"loja", "shopping", "comércio", "vitrine"},
+    "shop": {"loja", "comércio"},
+    "mall": {"shopping", "loja"},
+    "price": {"preço", "valor", "reais", "custa"},
+    "tag": {"etiqueta", "preço"},
+    "mannequin": {"manequim", "vitrine", "exposta"},
+    "cotton": {"algodão", "tecido"},
+    "money": {"dinheiro", "reais", "dólar", "moeda"},
+    "cash": {"dinheiro", "reais"},
+    # Production / Factory
+    "factory": {"fábrica", "indústria", "confecção"},
+    "sewing": {"costura", "costurar"},
+    "machine": {"máquina", "equipamento"},
+    "fabric": {"tecido", "pano"},
+    "thread": {"fio", "linha"},
+    "worker": {"trabalhador", "operário", "trabalho"},
+    "labor": {"trabalho", "trabalhador", "operário"},
+    "industry": {"indústria", "fábrica"},
+    "farm": {"campo", "fazenda", "agricultura"},
+    "harvest": {"colheita", "safra"},
+    # Science / Space
+    "space": {"espaço", "espacial", "cosmos"},
+    "rocket": {"foguete", "nave"},
+    "planet": {"planeta", "órbita"},
+    "star": {"estrela", "astro"},
+    "telescope": {"telescópio", "observatório"},
+    "galaxy": {"galáxia", "universo"},
+    "science": {"ciência", "científico"},
+    # Sports
+    "soccer": {"futebol", "bola", "gol"},
+    "football": {"futebol", "campo"},
+    "ball": {"bola", "jogo"},
+    "stadium": {"estádio", "arena"},
+    "player": {"jogador", "atleta"},
+    "game": {"jogo", "partida"},
+    "court": {"quadra", "campo"},
+}
+
+
 class SemanticRanker:
     def __init__(
         self,
@@ -40,24 +85,62 @@ class SemanticRanker:
         scene_narration: str,
         scene_intent: str,
     ) -> float:
-        """Evaluates semantic similarity between the candidate and the scene narration/intent."""
+        """Evaluates semantic similarity between candidate metadata and scene narration/intent.
+
+        No artificial 0.90 floor for smart_library — local assets compete fairly on relevance.
+        Prior editorial curation is captured solely via the previous_approval weight (0.05).
+        """
         if candidate.semantic_score > 0.0:
             return candidate.semantic_score
 
-        # Check keyword overlap between candidate query/tags and narration/intent
-        query_words = set(re.findall(r"\w+", candidate.query.lower()))
-        intent_words = set(re.findall(r"\w+", f"{scene_narration} {scene_intent}".lower()))
+        # Stopwords in PT and EN to prevent trivial conjunction/preposition matches
+        stopwords = {
+            "de", "do", "da", "dos", "das", "em", "no", "na", "nos", "nas",
+            "para", "por", "com", "sem", "um", "uma", "uns", "umas",
+            "o", "a", "os", "as", "que", "se", "e", "ou", "mas", "como", "mais",
+            "the", "a", "an", "in", "on", "at", "for", "of", "to", "and", "or",
+            "is", "are", "with", "from", "by", "this", "that"
+        }
 
-        overlap = query_words.intersection(intent_words)
-        base_score = 0.50
+        # Build token set from candidate attributes (query, category, creator, source)
+        cand_text = f"{candidate.query} {candidate.category} {candidate.creator_name} {candidate.source_page}"
+        cand_words = {
+            w for w in re.findall(r"\w+", cand_text.lower())
+            if len(w) > 2 and w not in stopwords
+        }
+
+        # Expand candidate words using bilingual lexicon (EN -> PT concepts)
+        expanded_cand_words = set(cand_words)
+        for w in cand_words:
+            if w in BILINGUAL_LEXICON:
+                expanded_cand_words.update(BILINGUAL_LEXICON[w])
+
+        # Build token set from scene context
+        scene_text = f"{scene_narration} {scene_intent}"
+        scene_words = {
+            w for w in re.findall(r"\w+", scene_text.lower())
+            if len(w) > 2 and w not in stopwords
+        }
+
+        overlap = expanded_cand_words.intersection(scene_words)
         if overlap:
-            base_score += min(0.40, len(overlap) * 0.15)
+            base_score = 0.40 + min(0.55, len(overlap) * 0.15)
+        else:
+            # Check for partial prefix/stem matches (e.g. camis- vs camiseta)
+            partial_matches = sum(
+                1 for cw in expanded_cand_words
+                if any(cw[:4] == sw[:4] for sw in scene_words if len(sw) >= 4 and len(cw) >= 4)
+            )
+            if partial_matches > 0:
+                base_score = 0.30 + min(0.30, partial_matches * 0.10)
+            else:
+                base_score = 0.20  # Completely irrelevant candidate
 
-        # Smart library assets start with high semantic baseline
-        if candidate.provider == "smart_library":
-            base_score = max(base_score, 0.90)
+        # Penalize if visual quality is known to be poor
+        if candidate.visual_quality_score > 0 and candidate.visual_quality_score < 0.20:
+            base_score *= 0.5
 
-        return min(1.0, max(0.2, round(base_score, 2)))
+        return min(1.0, max(0.15, round(base_score, 2)))
 
     def rank_candidates(
         self,
