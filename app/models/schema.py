@@ -120,6 +120,8 @@ class VideoParams(BaseModel):
         None  # Materials used to generate the video
     )
 
+    pipeline_mode: Optional[str] = "legacy"  # "legacy" or "editorial" (ShortsFactory)
+    brand_preset: Optional[str] = "editorial"
     custom_audio_file: Optional[str] = (
         None  # Custom audio file path, will ignore TTS and can still use Whisper subtitles
     )

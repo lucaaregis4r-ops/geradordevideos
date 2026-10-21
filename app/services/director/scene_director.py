@@ -20,6 +20,11 @@ from .scene_validator import realign_narration_with_original, validate_scene_pla
 from .visual_intent import estimate_duration_seconds, infer_visual_type
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class DirectorProvider(ABC):
     """Abstract interface for Scene Director LLM providers."""
 
@@ -52,20 +57,90 @@ class LocalRuleDirectorProvider(DirectorProvider):
 
         scenes: list[Scene] = []
         accumulated_time = 0.0
+        total_count = len(raw_sentences)
 
         for idx, sentence in enumerate(raw_sentences):
             scene_id = f"scene_{idx + 1:03d}"
             dur = estimate_duration_seconds(sentence)
             v_type = infer_visual_type(sentence)
+            lower_s = sentence.lower()
 
-            # Extract basic keywords for queries
-            words = [w.lower() for w in re.findall(r"\b[a-zA-ZÀ-ÿ]{4,}\b", sentence)]
-            top_words = words[:4] if words else ["short", "video"]
+            # Infer narrative function and humor
+            is_joke = any(k in lower_s for k in ["nervoso", "petróleo", "caiu", "ridícula", "piada"])
+            if idx == 0:
+                n_func = "hook"
+                n_phase = "aspiration"
+            elif idx == total_count - 1:
+                n_func = "conclusion"
+                n_phase = "reveal"
+            elif is_joke:
+                n_func = "joke"
+                n_phase = "commodity"
+            elif any(k in lower_s for k in ["r$", "custa", "reais", "preço", "valor"]):
+                n_func = "example"
+                n_phase = "commodity"
+            elif any(k in lower_s for k in ["fábrica", "máquina", "algodão", "produção"]):
+                n_func = "explanation"
+                n_phase = "production"
+            elif any(k in lower_s for k in ["trabalho", "costureira", "operário", "trabalhador"]):
+                n_func = "reveal"
+                n_phase = "labor"
+            else:
+                n_func = "explanation"
+                n_phase = "commodity"
+
+            # Extract price or keywords for text overlay
+            price_match = re.search(r"R\$\s*\d+([.,]\d+)?", sentence)
+            if price_match:
+                t_overlay = price_match.group(0)
+                t_level = "title"
+            elif is_joke:
+                t_overlay = None
+                t_level = "caption"
+            elif n_func in ("hook", "conclusion"):
+                t_overlay = sentence[:25].upper()
+                t_level = "title"
+            else:
+                t_overlay = None
+                t_level = "caption"
+
+            # Extract concrete entities
+            concrete_candidates = ["camiseta", "caneca", "carro", "celular", "algodão", "fábrica", "preço", "trabalho", "dinheiro", "café", "loja", "máquina", "petróleo"]
+            entities = [c for c in concrete_candidates if c in lower_s]
+            if not entities:
+                extracted_words = [w.lower() for w in re.findall(r"\b[a-zA-ZÀ-ÿ]{4,}\b", sentence)]
+                entities = extracted_words[:2] if extracted_words else ["objeto"]
+
+            # Generate concrete queries avoiding abstract terms ("economy", "market", "wealth", "value")
+            prohibited_terms = {"economy", "market", "wealth", "value", "capitalism", "supply", "chain"}
+            entity_main = entities[0] if entities else "product"
+            
+            # Map portuguese entity to english concrete visual
+            en_map = {
+                "camiseta": "t-shirt price tag store",
+                "caneca": "ceramic coffee mug table",
+                "carro": "luxury sports car city",
+                "celular": "modern smartphone retail store",
+                "algodão": "cotton field harvesting",
+                "fábrica": "garment factory industrial sewing",
+                "preço": "price tag in supermarket",
+                "trabalho": "factory workers assembling products",
+                "dinheiro": "counting cash money bills",
+                "café": "hot coffee pouring cup",
+                "loja": "clothing retail store interior",
+                "máquina": "industrial textile weaving machine",
+                "petróleo": "oil barrel falling on ground literal",
+            }
+            primary_query = en_map.get(entity_main, f"{entity_main} retail closeup")
+            
             queries = [
-                " ".join(top_words),
-                f"{top_words[0]} visual" if top_words else "concept",
-                f"{script.channel} {top_words[-1]}" if top_words else "background",
+                primary_query,
+                f"{entity_main} product display",
+                f"{entity_main} closeup visual",
             ]
+            queries = [q for q in queries if not any(p in q.lower() for p in prohibited_terms)]
+            if not queries:
+                queries = ["retail store product display"]
 
             scene = Scene(
                 scene_id=scene_id,
@@ -77,6 +152,15 @@ class LocalRuleDirectorProvider(DirectorProvider):
                 start=round(accumulated_time, 2),
                 end=round(accumulated_time + dur, 2),
                 confidence=0.85,
+                narrative_function=n_func,
+                narrative_phase=n_phase,
+                importance=4 if n_func in ("hook", "conclusion", "reveal") else 3,
+                text_overlay=t_overlay,
+                text_level=t_level,
+                humor=is_joke,
+                intentional_callback=None,
+                entities=entities,
+                duration_hint=1.2 if is_joke else (4.0 if n_func == "reveal" else dur),
             )
             scenes.append(scene)
             accumulated_time += dur
@@ -147,7 +231,11 @@ class GeminiDirectorProvider(DirectorProvider):
                 continue
 
         if not response or not response.text:
-            raise ValueError(f"All Gemini candidate models failed. Last error: {last_error}")
+            logger.warning(
+                "All Gemini candidate models failed (%s). Falling back to LocalRuleDirectorProvider.",
+                last_error,
+            )
+            return LocalRuleDirectorProvider().generate_plan(script, settings)
 
         response_text = response.text.strip()
         # Parse JSON
@@ -163,19 +251,48 @@ class GeminiDirectorProvider(DirectorProvider):
         scenes: list[Scene] = []
         accumulated_time = 0.0
 
+        prohibited_terms = {"economy", "market", "wealth", "value", "capitalism", "supply chain"}
+
         for idx, sc in enumerate(realigned):
             scene_id = sc.get("scene_id") or f"scene_{idx + 1:03d}"
             dur = estimate_duration_seconds(sc["narration"])
+            dur_hint = float(sc.get("duration_hint", dur))
+
+            # Filter prohibited abstract terms if the LLM slipped
+            raw_queries = sc.get("queries", [sc["narration"][:20]])
+            if isinstance(raw_queries, str):
+                raw_queries = [raw_queries]
+            cleaned_queries = [
+                q.strip() for q in raw_queries
+                if q.strip() and not any(p in q.lower() for p in prohibited_terms)
+            ]
+            if not cleaned_queries:
+                cleaned_queries = raw_queries
+
+            # Normalize entities list
+            entities_val = sc.get("entities", [])
+            if isinstance(entities_val, str):
+                entities_val = [e.strip() for e in entities_val.split(",") if e.strip()]
+
             scene = Scene(
                 scene_id=scene_id,
                 narration=sc["narration"],
                 intent=sc.get("intent", ""),
-                queries=sc.get("queries", [sc["narration"][:20]]),
+                queries=cleaned_queries,
                 visual_type=sc.get("visual_type", "stock_video"),
                 preferred_motion=sc.get("preferred_motion", "lateral"),
                 start=round(accumulated_time, 2),
                 end=round(accumulated_time + dur, 2),
                 confidence=float(sc.get("confidence", 0.9)),
+                narrative_function=sc.get("narrative_function", "explanation"),
+                narrative_phase=sc.get("narrative_phase", "commodity"),
+                importance=int(sc.get("importance", 3)),
+                text_overlay=sc.get("text_overlay"),
+                text_level=sc.get("text_level", "caption"),
+                humor=bool(sc.get("humor", False)),
+                intentional_callback=sc.get("intentional_callback"),
+                entities=entities_val,
+                duration_hint=dur_hint,
             )
             scenes.append(scene)
             accumulated_time += dur
@@ -240,6 +357,7 @@ class SceneDirector:
         # 2. Invoke provider
         settings = {"brand_preset": brand_preset}
         plan = self.provider.generate_plan(script_version, settings)
+        plan.title = title
 
         # 3. Save scenes.json
         if save_plan:

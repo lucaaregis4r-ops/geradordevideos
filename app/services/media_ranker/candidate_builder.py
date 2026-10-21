@@ -66,19 +66,131 @@ def _generate_synthetic_clip(
         subprocess.run(cmd_plain, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def _generate_synthetic_photo_clip(
+    query: str,
+    output_path: Path,
+    duration: float = 5.0,
+    motion: str = "zoom_in",
+) -> None:
+    """Generates an aesthetic photographic synthetic plate with Ken Burns motion."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists() and output_path.stat().st_size > 1000:
+        return
+
+    from PIL import Image, ImageDraw
+    from app.services.utils.ken_burns import create_ken_burns_clip
+
+    # Create an elegant textured plate (1440x2560 for crisp Ken Burns zoom)
+    w, h = 1440, 2560
+    img = Image.new("RGB", (w, h))
+    draw = ImageDraw.Draw(img)
+
+    colors = [
+        ((26, 42, 108), (178, 31, 31)),
+        ((17, 153, 142), (56, 239, 125)),
+        ((15, 32, 39), (44, 83, 100)),
+        ((75, 108, 183), (24, 40, 72)),
+        ((35, 37, 38), (65, 67, 69)),
+    ]
+    idx = int(hashlib.md5(query.encode()).hexdigest(), 16) % len(colors)
+    c1, c2 = colors[idx]
+
+    for y in range(h):
+        ratio = y / float(h)
+        r = int(c1[0] + (c2[0] - c1[0]) * ratio)
+        g = int(c1[1] + (c2[1] - c1[1]) * ratio)
+        b = int(c1[2] + (c2[2] - c1[2]) * ratio)
+        draw.line([(0, y), (w, y)], fill=(r, g, b))
+
+    tmp_plate = output_path.parent / f"_tmp_{output_path.stem}.png"
+    img.save(tmp_plate)
+
+    try:
+        create_ken_burns_clip(
+            image_path=tmp_plate,
+            output_path=output_path,
+            duration=duration,
+            motion=motion,
+            width=1080,
+            height=1920,
+        )
+    finally:
+        tmp_plate.unlink(missing_ok=True)
+
+
+def _generate_synthetic_meme_clip(
+    query: str,
+    output_path: Path,
+    duration: float = 1.2,
+) -> None:
+    """Generates a high-contrast comedic break card / ironic meme clip (Section 11).
+
+    Features bold satirical framing, punchy colors, and hard cuts without Ken Burns zoom.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists() and output_path.stat().st_size > 1000:
+        return
+
+    from PIL import Image, ImageDraw
+    w, h = 1080, 1920
+    img = Image.new("RGB", (w, h), color=(14, 14, 16))
+    draw = ImageDraw.Draw(img)
+
+    # Accent warning border / frame
+    border_margin = 80
+    draw.rounded_rectangle(
+        [(border_margin, 700), (w - border_margin, 1220)],
+        radius=28,
+        fill=(250, 180, 30),
+    )
+    # Inner dark contrast plate
+    draw.rounded_rectangle(
+        [(border_margin + 12, 712), (w - border_margin - 12, 1208)],
+        radius=20,
+        fill=(18, 18, 20),
+    )
+
+    clean_label = query.upper()[:40].replace("'", "")
+    # Header tag
+    draw.text((w // 2, 790), "⚠️  METÁFORA LITERAL  ⚠️", fill=(250, 180, 30), anchor="mm")
+    # Punchline
+    draw.text((w // 2, 960), clean_label, fill=(255, 255, 255), anchor="mm")
+
+    tmp_png = output_path.parent / f"_tmp_meme_{output_path.stem}.png"
+    img.save(tmp_png)
+
+    # Hard cut, no Ken Burns zoom
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-loop", "1", "-i", str(tmp_png),
+        "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+        "-t", f"{duration:.2f}",
+        "-vf", "scale=1080:1920,setsar=1,fps=30",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        str(output_path),
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    finally:
+        tmp_png.unlink(missing_ok=True)
+
+
 class CandidateBuilder:
     def __init__(self, media_cache_dir: str | Path = "storage/media_cache"):
         self.media_cache_dir = Path(media_cache_dir).resolve()
         self.media_cache_dir.mkdir(parents=True, exist_ok=True)
 
-    def search_local_library(self, query: str) -> List[MediaCandidate]:
-        """Searches local media in storage/media_cache/."""
+    def search_local_library(
+        self, query: str, target_duration: float = 5.0, preferred_motion: str = "zoom_in"
+    ) -> List[MediaCandidate]:
+        """Searches local media in storage/media_cache/ (videos and images)."""
         results: List[MediaCandidate] = []
         tokens = [t.lower() for t in query.split() if len(t) > 2]
         if not tokens:
             return results
 
-        # Look for local mp4 files and sidecar metadata
+        # 1. Look for local mp4 files
         for mp4 in self.media_cache_dir.glob("*.mp4"):
             name = mp4.stem.lower()
             if any(tok in name for tok in tokens):
@@ -97,6 +209,42 @@ class CandidateBuilder:
                         final_score=0.95,
                     )
                 )
+
+        # 2. Look for local image files (jpg, jpeg, png, webp) and convert with Ken Burns
+        photo_dir = self.media_cache_dir / "rendered_photos"
+        photo_dir.mkdir(parents=True, exist_ok=True)
+        from app.services.utils.ken_burns import create_ken_burns_clip
+
+        for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+            for img_file in self.media_cache_dir.glob(ext):
+                name = img_file.stem.lower()
+                if any(tok in name for tok in tokens):
+                    asset_id = f"photo_{img_file.stem}"
+                    clip_path = photo_dir / f"{asset_id}.mp4"
+                    try:
+                        create_ken_burns_clip(
+                            image_path=img_file,
+                            output_path=clip_path,
+                            duration=target_duration,
+                            motion=preferred_motion,
+                        )
+                        results.append(
+                            MediaCandidate(
+                                provider="local_photo",
+                                asset_id=asset_id,
+                                query=query,
+                                width=1080,
+                                height=1920,
+                                duration=target_duration,
+                                url=str(clip_path),
+                                local_path=str(clip_path),
+                                technical_score=0.97,
+                                final_score=0.97,
+                            )
+                        )
+                    except Exception:
+                        pass
+
         return results
 
     def search_query(
@@ -104,17 +252,24 @@ class CandidateBuilder:
         query: str,
         target_duration: float = 4.0,
         enable_synthetic_fallback: bool = True,
+        visual_type: str = "stock_video",
+        preferred_motion: str = "zoom_in",
     ) -> List[MediaCandidate]:
         """Searches providers and local library for a given query string."""
         candidates: List[MediaCandidate] = []
+        is_photo_intent = visual_type.lower() in ("stock_image", "photo", "archive", "generated_image")
 
-        # 1. Search local library first
-        local_matches = self.search_local_library(query)
+        # 1. Search local library first (including photos with Ken Burns)
+        local_matches = self.search_local_library(
+            query=query,
+            target_duration=target_duration,
+            preferred_motion=preferred_motion,
+        )
         candidates.extend(local_matches)
 
-        # 2. Check Pexels
+        # 2. Check Pexels (if video intent and keys present)
         pexels_keys = config.app.get("pexels_api_keys", [])
-        if pexels_keys:
+        if pexels_keys and not is_photo_intent:
             try:
                 min_dur = max(3, int(target_duration))
                 raw_pexels = material.search_videos_pexels(
@@ -135,12 +290,12 @@ class CandidateBuilder:
                             source_page=(item.source_info or {}).get("source_page", ""),
                         )
                     )
-            except Exception as e:
+            except Exception:
                 pass
 
         # 3. Check Pixabay
         pixabay_keys = config.app.get("pixabay_api_keys", [])
-        if pixabay_keys:
+        if pixabay_keys and not is_photo_intent:
             try:
                 min_dur = max(3, int(target_duration))
                 raw_pixabay = material.search_videos_pixabay(
@@ -161,30 +316,61 @@ class CandidateBuilder:
                             source_page=(item.source_info or {}).get("source_page", ""),
                         )
                     )
-            except Exception as e:
+            except Exception:
                 pass
 
         # 4. Fallback generator if no external API returns results
         if not candidates and enable_synthetic_fallback:
-            slug = hashlib.md5(query.encode()).hexdigest()[:10]
-            synthetic_path = self.media_cache_dir / f"synthetic_{slug}.mp4"
-            _generate_synthetic_clip(
-                query=query,
-                output_path=synthetic_path,
-                duration=max(5.0, target_duration + 1.0),
+            slug = hashlib.md5(f"{query}_{visual_type}".encode()).hexdigest()[:10]
+            is_meme_intent = (
+                visual_type.lower() in ("meme", "graphic")
+                or any(w in query.lower() for w in ["literal", "falling", "joke", "ironic"])
             )
+            if is_meme_intent:
+                synthetic_path = self.media_cache_dir / f"meme_syn_{slug}.mp4"
+                meme_dur = min(1.5, max(0.8, target_duration))
+                _generate_synthetic_meme_clip(
+                    query=query,
+                    output_path=synthetic_path,
+                    duration=meme_dur,
+                )
+                provider_tag = "synthetic_meme"
+                syn_duration = meme_dur
+                tech_score = 0.95
+            elif is_photo_intent:
+                synthetic_path = self.media_cache_dir / f"photo_syn_{slug}.mp4"
+                syn_duration = max(5.0, target_duration + 1.0)
+                _generate_synthetic_photo_clip(
+                    query=query,
+                    output_path=synthetic_path,
+                    duration=syn_duration,
+                    motion=preferred_motion,
+                )
+                provider_tag = "synthetic_photo"
+                tech_score = 0.92
+            else:
+                synthetic_path = self.media_cache_dir / f"synthetic_{slug}.mp4"
+                syn_duration = max(5.0, target_duration + 1.0)
+                _generate_synthetic_clip(
+                    query=query,
+                    output_path=synthetic_path,
+                    duration=syn_duration,
+                )
+                provider_tag = "synthetic_local"
+                tech_score = 0.92
+
             candidates.append(
                 MediaCandidate(
-                    provider="synthetic_local",
+                    provider=provider_tag,
                     asset_id=f"syn_{slug}",
                     query=query,
                     width=1080,
                     height=1920,
-                    duration=max(5.0, target_duration + 1.0),
+                    duration=syn_duration,
                     url=str(synthetic_path),
                     local_path=str(synthetic_path),
-                    technical_score=0.90,
-                    final_score=0.90,
+                    technical_score=tech_score,
+                    final_score=tech_score,
                 )
             )
 

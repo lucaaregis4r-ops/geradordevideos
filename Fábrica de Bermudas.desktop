@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Fábrica de Bermudas
+GenericName=Gerador de Vídeos Curtos
+Comment=Abrir Fábrica de Shorts e Bermudas no Navegador
+Exec=/bin/bash "/home/lucasregis/Área de trabalho/Projetos/Backup/fabrica de bermudas/abrir_programa.sh"
+Path=/home/lucasregis/Área de trabalho/Projetos/Backup/fabrica de bermudas
+Icon=video-x-generic
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Video;Graphics;

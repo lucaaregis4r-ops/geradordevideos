@@ -97,7 +97,7 @@ _VIDEO_MUSIC_PROVIDERS = {
 _SUPPORTED_VIDEO_SOURCES = frozenset({
     "pexels", "pixabay", "coverr", "local", "wavespeed",
     "volcengine_seedance", "ofox", "metaso_minimax", "muapi",
-    "loomloom", "openai_image",
+    "loomloom", "openai_image", "editorial",
 })
 
 
@@ -1507,6 +1507,79 @@ def _schedule_cross_post(
     return None
 
 
+def _run_editorial_pipeline(task_id: str, params: VideoParams, stop_at: str = "video"):
+    """Routes modern editorial video tasks through the ShortsFactory pipeline."""
+    from pathlib import Path
+    from app.services.factory import ShortsFactory
+
+    logger.info(f"Routing task {task_id} through ShortsFactory (editorial pipeline)")
+    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=10)
+
+    # 1. Prepare script: user script or generated
+    script_text = (params.video_script or "").strip()
+    if not script_text:
+        script_text = generate_script(task_id, params)
+        if not script_text or (isinstance(script_text, str) and script_text.startswith("Error: ")):
+            return _mark_task_failed(task_id, "script", script_text or "failed to generate script")
+
+    if stop_at == "script":
+        sm.state.update_task(task_id, state=const.TASK_STATE_COMPLETE, progress=100, script=script_text)
+        return {"script": script_text}
+
+    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=25, script=script_text)
+
+    factory = ShortsFactory(
+        base_dir="storage",
+        voice_name=params.voice_name or "pt-BR-AntonioNeural-Male",
+    )
+
+    def on_factory_progress(msg: str, pct: float):
+        progress_val = int(25 + pct * 65)
+        sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=progress_val)
+
+    try:
+        draft = factory.produce_draft(
+            script_id=task_id,
+            script_text=script_text,
+            title=params.video_subject,
+            brand_style=params.brand_preset or "editorial",
+            voice_name=params.voice_name or "pt-BR-AntonioNeural-Male",
+            on_progress=on_factory_progress,
+        )
+
+        final_video = draft.get("video_path")
+        if not final_video or not Path(final_video).exists():
+            return _mark_task_failed(task_id, "video", "ShortsFactory did not produce output video")
+
+        # Synchronize editorial artifacts into task directory for API/UI access
+        import shutil
+        task_dir_path = Path(utils.task_dir(task_id))
+        task_dir_path.mkdir(parents=True, exist_ok=True)
+        for key in ["storyboard_html_path", "storyboard_md_path"]:
+            src = draft.get(key)
+            if src and Path(src).exists():
+                shutil.copy2(src, task_dir_path / Path(src).name)
+
+        plan_src = draft.get("plan_path")
+        if plan_src and Path(plan_src).exists():
+            shutil.copy2(plan_src, task_dir_path / "assembly_plan.json")
+
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_COMPLETE,
+            progress=100,
+            videos=[str(final_video)],
+            combined_videos=[str(final_video)],
+            storyboard_html=draft.get("storyboard_html_path"),
+            storyboard_md=draft.get("storyboard_md_path"),
+            error=None,
+        )
+        return draft
+    except Exception as exc:
+        logger.exception(f"ShortsFactory execution failed for task {task_id}: {exc}")
+        return _mark_task_failed(task_id, "factory", str(exc))
+
+
 def _run_pipeline(
     task_id,
     params: VideoParams,
@@ -1524,6 +1597,10 @@ def _run_pipeline(
         failed_stage=None, error=None,
         videos=[], combined_videos=[], warnings=None, failed_video_index=None,
     )
+
+    # Route editorial pipeline tasks to ShortsFactory
+    if getattr(params, "pipeline_mode", "legacy") == "editorial" or params.video_source == "editorial":
+        return _run_editorial_pipeline(task_id, params, stop_at=stop_at)
 
     if stop_at == "video" and params.subtitle_enabled:
         try:

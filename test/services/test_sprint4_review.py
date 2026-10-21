@@ -16,7 +16,9 @@ from app.services.media_ranker.candidate_builder import _generate_synthetic_clip
 from app.services.review import ReviewManager
 
 
-def test_review_manager_inspection_and_swap(tmp_path: Path):
+def test_review_manager_inspection_and_swap(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("app.services.material.search_videos_pixabay", lambda *a, **kw: [])
+    monkeypatch.setattr("app.services.material.search_videos_pexels", lambda *a, **kw: [])
     base_dir = tmp_path / "factory"
     factory = ShortsFactory(base_dir=base_dir)
 
@@ -66,6 +68,8 @@ def test_review_manager_inspection_and_swap(tmp_path: Path):
     assert swap_res["swapped_scene"] == "scene_002"
     reused = swap_res["reused_stages"]
     built = swap_res["built_stages"]
+    print("DEBUG REUSED:", reused)
+    print("DEBUG BUILT:", built)
 
     # Verify that scene_001 was 100% reused from cache
     assert "scene_001:scene" in reused, "Scene 1 video must be reused from cache!"

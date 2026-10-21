@@ -39,6 +39,8 @@ streamlit.log
 .coverage
 coverage.xml
 htmlcov/
+.pytest_cache/
+.ruff_cache/
 .codegraph
 /docs/superpowers
 .understand-anything

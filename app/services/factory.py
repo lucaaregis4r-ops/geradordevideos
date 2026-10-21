@@ -11,11 +11,21 @@ from typing import Any, Callable, Optional
 
 from app.config import config
 from app.services import voice
+from app.services.assembly.planner import AssemblyPlanner
+from app.services.assembly.pre_visualizer import PreVisualizer
+from app.services.assembly.quality_checker import QualityChecker
+from app.services.audio.mastering import (
+    master_voice_track,
+    mix_voice_with_adaptive_bgm,
+    remux_video_with_audio,
+)
 from app.services.director.scene_director import SceneDirector
 from app.services.director.schemas import ScenePlan
 from app.services.editorial.pronunciation import PronunciationEngine
 from app.services.editorial.script_manager import ScriptManager
+from app.services.graphics.typography_engine import TypographyEngine, composite_overlay_to_clip
 from app.services.media_ranker.media_searcher import MediaSearcher
+from app.services.utils.ken_burns import create_ken_burns_clip, is_image_file
 from app.services.video_project import VideoProject
 
 
@@ -40,6 +50,10 @@ class ShortsFactory:
         self.pronunciation_engine = PronunciationEngine()
         self.director = SceneDirector(script_manager=self.script_manager)
         self.searcher = MediaSearcher(media_cache_dir=self.media_cache_dir)
+        self.assembly_planner = AssemblyPlanner(deduplicator=self.searcher.deduplicator)
+        self.quality_checker = QualityChecker()
+        self.pre_visualizer = PreVisualizer()
+        self.typography_engine = TypographyEngine()
         self.voice_name = voice_name
 
     def produce_draft(
@@ -51,6 +65,8 @@ class ShortsFactory:
         channel: str = "default",
         brand_style: str = "editorial",
         voice_name: Optional[str] = None,
+        bgm_path: Optional[str | Path] = None,
+        bgm_volume: float = 0.20,
         on_progress: Optional[Callable[[str, float], None]] = None,
     ) -> dict[str, Any]:
         """Executes the complete pipeline:
@@ -93,9 +109,17 @@ class ShortsFactory:
                 voice_rate=1.0,
                 voice_file=str(audio_path),
             )
+            # Master the voice track to EBU R128 (-14.0 LUFS) with high-pass and compressor
+            mastered_path = audio_dir / f"{scene.scene_id}_mastered.mp3"
+            try:
+                master_voice_track(audio_path, mastered_path, target_lufs=-14.0)
+                final_audio_path = mastered_path
+            except Exception:
+                final_audio_path = audio_path
+
             scene.overlay = scene.overlay or {}
             scene.overlay["spoken_text"] = spoken_text
-            scene.overlay["audio_file"] = str(audio_path)
+            scene.overlay["audio_file"] = str(final_audio_path)
 
         # 3. Media Search & Candidate Collection
         if on_progress:
@@ -107,28 +131,92 @@ class ShortsFactory:
             save_plan_path=project_folder / "scenes.json",
         )
 
-        # 4. Assemble Project Manifest for VideoProject
+        # 4. Generate AssemblyPlan and Run Quality Check
         if on_progress:
-            on_progress("Creating editable project manifest...", 0.80)
+            on_progress("Building assembly plan and evaluating quality...", 0.75)
+        assembly_plan = self.assembly_planner.build_plan(plan)
+        quality_score = self.quality_checker.evaluate(assembly_plan)
+
+        assembly_plan_path = project_folder / "assembly_plan.json"
+        with assembly_plan_path.open("w", encoding="utf-8") as f:
+            f.write(assembly_plan.to_json(indent=2))
+
+        # Generate pre-render storyboard reports (HTML & Markdown)
+        storyboard_files = self.pre_visualizer.save_reports(
+            plan=assembly_plan,
+            output_dir=project_folder,
+            scene_plan=plan,
+            title=title or getattr(plan, "title", ""),
+        )
+
+        # 5. Assemble Project Manifest for VideoProject
+        if on_progress:
+            on_progress("Creating editable project manifest...", 0.85)
         project_scenes = []
-        for scene in plan.scenes:
-            selected = scene.selected_media or {}
-            footage_path = selected.get("local_path")
-            audio_path = (scene.overlay or {}).get("audio_file")
+        scene_by_id = {s.scene_id: s for s in plan.scenes}
+        overlays_dir = project_folder / "overlays"
+        composited_dir = project_folder / "composited"
+        ken_burns_dir = project_folder / "ken_burns"
+
+        for segment in assembly_plan.segments:
+            scene = scene_by_id.get(segment.scene_ref)
+            narration = scene.narration if scene else ""
+            audio_path = (scene.overlay or {}).get("audio_file") if scene else None
+            footage_path = segment.asset_path
+            scene_key = segment.scene_ref or segment.segment_id
+            seg_duration = float(segment.end - segment.start)
 
             if not footage_path or not Path(footage_path).exists():
                 # Fallback to synthetic clip if not local
-                fallback_clip = self.media_cache_dir / f"fallback_{scene.scene_id}.mp4"
+                fallback_clip = self.media_cache_dir / f"fallback_{scene_key}.mp4"
                 from .media_ranker.candidate_builder import _generate_synthetic_clip
-                _generate_synthetic_clip(scene.queries[0] if scene.queries else scene.narration, fallback_clip)
+                query = scene.queries[0] if (scene and scene.queries) else (narration or segment.segment_id)
+                _generate_synthetic_clip(query, fallback_clip)
                 footage_path = str(fallback_clip)
+
+            # If asset is a static image, convert to vertical Ken Burns video clip
+            if is_image_file(footage_path):
+                ken_burns_dir.mkdir(parents=True, exist_ok=True)
+                kb_clip = ken_burns_dir / f"{scene_key}_kb.mp4"
+                motion = getattr(scene, "preferred_motion", "zoom_in") if scene else "zoom_in"
+                try:
+                    create_ken_burns_clip(
+                        image_path=footage_path,
+                        output_path=kb_clip,
+                        duration=max(seg_duration, 3.0),
+                        motion=motion,
+                    )
+                    footage_path = str(kb_clip)
+                except Exception:
+                    pass
+
+            # If segment has text overlay, render safe area PNG and composite onto clip
+            if segment.overlay_text and segment.overlay_text.strip():
+                try:
+                    overlays_dir.mkdir(parents=True, exist_ok=True)
+                    composited_dir.mkdir(parents=True, exist_ok=True)
+                    overlay_png = overlays_dir / f"{scene_key}_overlay.png"
+                    self.typography_engine.render_overlay_to_file(
+                        text=segment.overlay_text,
+                        output_path=overlay_png,
+                        level=segment.text_level,
+                    )
+                    comp_clip = composited_dir / f"{scene_key}_comp.mp4"
+                    composite_overlay_to_clip(
+                        video_path=footage_path,
+                        overlay_png_path=overlay_png,
+                        output_path=comp_clip,
+                    )
+                    footage_path = str(comp_clip)
+                except Exception:
+                    pass
 
             project_scenes.append(
                 {
-                    "id": scene.scene_id,
-                    "narration": scene.narration,
-                    "duration": float(scene.end - scene.start) if (scene.end and scene.start) else 4.0,
-                    "footage": footage_path,
+                    "id": scene_key,
+                    "narration": narration,
+                    "duration": seg_duration,
+                    "footage": str(Path(footage_path).resolve()),
                     "audio": audio_path,
                 }
             )
@@ -143,7 +231,7 @@ class ShortsFactory:
         )
         rev_id = rev_spec["revision_id"]
 
-        # 5. Render Video Draft
+        # 6. Render Video Draft
         if on_progress:
             on_progress("Rendering draft video with FFmpeg...", 0.90)
         render_status = video_project.render(rev_id)
@@ -152,12 +240,53 @@ class ShortsFactory:
             on_progress("Production completed!", 1.0)
 
         export_info = render_status.get("export", {})
+        final_video_path = export_info.get("path")
+
+        # 7. Optional Adaptive BGM Automation & Remuxing
+        if bgm_path and Path(bgm_path).exists() and final_video_path and Path(final_video_path).exists():
+            if on_progress:
+                on_progress("Applying adaptive BGM automation with sidechain ducking...", 0.95)
+            try:
+                import subprocess
+                extracted_voice = project_folder / "audio" / "extracted_voice.wav"
+                cmd_extract = [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-i", str(final_video_path),
+                    "-vn", "-ac", "2", "-ar", "48000",
+                    str(extracted_voice),
+                ]
+                subprocess.run(cmd_extract, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                mixed_audio = project_folder / "audio" / "adaptive_bgm_mix.wav"
+                phase_segments = [s.to_dict() for s in assembly_plan.segments]
+                mix_voice_with_adaptive_bgm(
+                    voice_path=extracted_voice,
+                    bgm_path=bgm_path,
+                    output_path=mixed_audio,
+                    phase_segments=phase_segments,
+                    base_volume=bgm_volume,
+                )
+
+                remuxed_video = project_folder / f"{script_id}_mastered.mp4"
+                remux_video_with_audio(
+                    video_path=final_video_path,
+                    audio_path=mixed_audio,
+                    output_path=remuxed_video,
+                )
+                final_video_path = str(remuxed_video)
+            except Exception:
+                pass
+
         return {
             "script_id": script_id,
             "revision_id": rev_id,
             "status": render_status["state"],
             "plan_path": str(project_folder / "scenes.json"),
-            "video_path": export_info.get("path"),
+            "assembly_plan_path": str(assembly_plan_path),
+            "storyboard_md_path": str(storyboard_files["markdown"]),
+            "storyboard_html_path": str(storyboard_files["html"]),
+            "quality_score": quality_score.to_dict(),
+            "video_path": final_video_path,
             "total_scenes": plan.total_scenes,
             "estimated_duration": plan.estimated_duration,
         }

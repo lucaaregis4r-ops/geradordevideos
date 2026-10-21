@@ -10,6 +10,44 @@ import json
 from typing import Any, Optional
 
 
+class NarrativeFunction(str, Enum):
+    """Classifies the rhetorical purpose of a scene segment."""
+    HOOK = "hook"
+    SETUP = "setup"
+    EXAMPLE = "example"
+    EXPLANATION = "explanation"
+    CONCEPT = "concept"
+    CONTRAST = "contrast"
+    JOKE = "joke"
+    REVEAL = "reveal"
+    TRANSITION = "transition"
+    CONCLUSION = "conclusion"
+
+
+class NarrativePhase(str, Enum):
+    """Tracks the visual/tonal progression of the video argument across 5 dramatic acts."""
+    # Canonical 5 acts from editorial report
+    PROMESSA = "promessa"        # Ato 1 — Promessa / Aspiration
+    OBJETO = "objeto"            # Ato 2 — Objeto / Commodity
+    BASTIDORES = "bastidores"    # Ato 3 — Bastidores / Production
+    REVELACAO = "revelacao"      # Ato 4 — Revelação / Labor
+    FECHAMENTO = "fechamento"    # Ato 5 — Fechamento / Conclusion
+
+    # Compatibility aliases
+    ASPIRATION = "aspiration"
+    COMMODITY = "commodity"
+    PRODUCTION = "production"
+    LABOR = "labor"
+    REVEAL = "reveal"
+
+
+class TextLevel(str, Enum):
+    """Typographic hierarchy for on-screen text overlays."""
+    TITLE = "title"          # 1-5 words, huge
+    EMPHASIS = "emphasis"    # short phrase, medium
+    CAPTION = "caption"      # subtitle-style, small
+
+
 class VisualType(str, Enum):
     STOCK_VIDEO = "stock_video"
     STOCK_IMAGE = "stock_image"
@@ -22,6 +60,11 @@ class VisualType(str, Enum):
     NUMBER = "number"
     TITLE = "title"
     GENERATED_IMAGE = "generated_image"
+    GIF = "gif"
+    SCREENSHOT = "screenshot"
+    MEME = "meme"
+    ILLUSTRATION = "illustration"
+    ADVERTISEMENT = "advertisement"
 
 
 class MotionType(str, Enum):
@@ -48,6 +91,16 @@ class Scene:
     media_candidates: list[dict[str, Any]] = field(default_factory=list)
     selected_media: Optional[dict[str, Any]] = None
     confidence: float = 0.0
+    # --- Editorial / narrative fields (v0.2+) ---
+    narrative_function: str = "explanation"
+    narrative_phase: str = "commodity"
+    importance: int = 3
+    text_overlay: Optional[str] = None
+    text_level: str = "caption"
+    humor: bool = False
+    intentional_callback: Optional[str] = None
+    entities: list[str] = field(default_factory=list)
+    duration_hint: float = 3.0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -75,6 +128,16 @@ class Scene:
             media_candidates=data.get("media_candidates", []),
             selected_media=data.get("selected_media"),
             confidence=float(data.get("confidence", 0.0)),
+            # Editorial fields with safe defaults
+            narrative_function=str(data.get("narrative_function", "explanation")).lower(),
+            narrative_phase=str(data.get("narrative_phase", "commodity")).lower(),
+            importance=int(data.get("importance", 3)),
+            text_overlay=data.get("text_overlay"),
+            text_level=str(data.get("text_level", "caption")).lower(),
+            humor=bool(data.get("humor", False)),
+            intentional_callback=data.get("intentional_callback"),
+            entities=list(data.get("entities", [])),
+            duration_hint=float(data.get("duration_hint", 3.0)),
         )
 
 
@@ -88,6 +151,7 @@ class ScenePlan:
     scenes: list[Scene]
     brand_preset: str = "editorial"
     created_at: str = ""
+    title: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -99,6 +163,7 @@ class ScenePlan:
             "scenes": [s.to_dict() for s in self.scenes],
             "brand_preset": self.brand_preset,
             "created_at": self.created_at,
+            "title": self.title,
         }
 
     def to_json(self, indent: int = 2) -> str:
@@ -116,4 +181,5 @@ class ScenePlan:
             scenes=scenes,
             brand_preset=data.get("brand_preset", "editorial"),
             created_at=data.get("created_at", ""),
+            title=data.get("title", ""),
         )

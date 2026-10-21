@@ -113,34 +113,90 @@ class ReviewManager:
         with scenes_file.open("w", encoding="utf-8") as f:
             f.write(plan.to_json(indent=2))
 
-        # Re-build project manifest for VideoProject
+        # Re-build project manifest for VideoProject based on previous revision
         render_folder = folder / "render_project"
         vp = VideoProject(render_folder)
+        try:
+            prev_spec = vp.revision()
+            prev_scenes = {s["id"]: s for s in prev_spec.get("scenes", [])}
+            render_settings = prev_spec.get("settings", {"width": 1080, "height": 1920, "fps": 30})
+        except Exception:
+            prev_scenes = {}
+            render_settings = {"width": 1080, "height": 1920, "fps": 30}
+
+        def _extract_asset_path(val: Any) -> Optional[str]:
+            if not val:
+                return None
+            if isinstance(val, dict):
+                rel = val.get("path")
+                if rel:
+                    p = render_folder / rel
+                    if p.exists():
+                        return str(p.resolve())
+                return None
+            p = Path(val)
+            if not p.is_absolute():
+                p = render_folder / p
+            return str(p.resolve()) if p.exists() else str(p)
 
         project_scenes = []
         for s in plan.scenes:
-            selected = s.selected_media or {}
-            f_path = selected.get("local_path")
-            if not f_path or not Path(f_path).exists():
-                fallback_clip = self.media_cache_dir / f"fallback_{s.scene_id}.mp4"
-                _generate_synthetic_clip(s.queries[0] if s.queries else s.narration, fallback_clip)
-                f_path = str(fallback_clip)
+            if s.scene_id == scene_id:
+                # Target swapped scene
+                f_path = str(footage_file.resolve())
+                prev_audio = (prev_scenes.get(s.scene_id) or {}).get("audio")
+                audio_path = _extract_asset_path(prev_audio)
+                if not audio_path:
+                    def_audio = folder / "audio" / f"{s.scene_id}.mp3"
+                    audio_path = str(def_audio.resolve()) if def_audio.exists() else None
 
-            audio_file = folder / "audio" / f"{s.scene_id}.mp3"
-            project_scenes.append(
-                {
-                    "id": s.scene_id,
-                    "narration": s.narration,
-                    "duration": float(s.end - s.start) if (s.end and s.start) else 4.0,
-                    "footage": str(Path(f_path).resolve()),
-                    "audio": str(audio_file) if audio_file.exists() else None,
-                }
-            )
+                seg_dur = float(s.end - s.start) if (s.end and s.start) else (prev_scenes.get(s.scene_id) or {}).get("duration", 4.0)
+                project_scenes.append(
+                    {
+                        "id": s.scene_id,
+                        "narration": s.narration,
+                        "duration": seg_dur,
+                        "footage": f_path,
+                        "audio": audio_path,
+                    }
+                )
+            elif s.scene_id in prev_scenes:
+                # 100% exact copy of unchanged scene from previous revision to guarantee cache hit!
+                prev_s = prev_scenes[s.scene_id]
+                footage_path = _extract_asset_path(prev_s.get("footage"))
+                audio_path = _extract_asset_path(prev_s.get("audio"))
+                project_scenes.append(
+                    {
+                        "id": s.scene_id,
+                        "narration": prev_s.get("narration", s.narration),
+                        "duration": prev_s.get("duration", 4.0),
+                        "footage": footage_path,
+                        "audio": audio_path,
+                    }
+                )
+            else:
+                selected = s.selected_media or {}
+                f_path = selected.get("local_path")
+                if not f_path or not Path(f_path).exists():
+                    fallback_clip = self.media_cache_dir / f"fallback_{s.scene_id}.mp4"
+                    _generate_synthetic_clip(s.queries[0] if s.queries else s.narration, fallback_clip)
+                    f_path = str(fallback_clip)
+
+                audio_file = folder / "audio" / f"{s.scene_id}.mp3"
+                project_scenes.append(
+                    {
+                        "id": s.scene_id,
+                        "narration": s.narration,
+                        "duration": float(s.end - s.start) if (s.end and s.start) else 4.0,
+                        "footage": str(Path(f_path).resolve()),
+                        "audio": str(audio_file) if audio_file.exists() else None,
+                    }
+                )
 
         new_rev = vp.create_revision(
             {
                 "project_id": project_id,
-                "settings": {"width": 1080, "height": 1920, "fps": 30},
+                "settings": render_settings,
                 "scenes": project_scenes,
             }
         )

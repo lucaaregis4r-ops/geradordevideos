@@ -69,16 +69,13 @@ from app.utils.logging_utils import configure_terminal_logger
 from app.utils import utils
 
 st.set_page_config(
-    page_title="MoneyPrinterTurbo",
-    page_icon="🤖",
+    page_title="Fábrica de Bermudas — Gerador de Vídeos Curtos",
+    page_icon="🎬",
     layout="wide",
     initial_sidebar_state="auto",
     menu_items={
-        "Report a bug": "https://github.com/harry0703/MoneyPrinterTurbo/issues",
-        "About": "# MoneyPrinterTurbo\nSimply provide a topic or keyword for a video, and it will "
-        "automatically generate the video copy, video materials, video subtitles, "
-        "and video background music before synthesizing a high-definition short "
-        "video.\n\nhttps://github.com/harry0703/MoneyPrinterTurbo",
+        "Report a bug": "https://github.com/lucaaregis4r-ops/geradordevideos/issues",
+        "About": "# 🎬 Fábrica de Bermudas / Projeto Mercadoria\nAutomação de ensaios e vídeos verticais (9:16) com direção semântica, safe area, masterização EBU R128 (-14 LUFS) e Quality Gate pré-render.\n\nhttps://github.com/lucaaregis4r-ops/geradordevideos",
     },
 )
 
@@ -1738,13 +1735,14 @@ def _render_brand(available_update: str | None = None):
     st.markdown(
         f"""
         <h1 class="mpt-brand">
-            <span class="mpt-brand__name">MoneyPrinterTurbo</span>
+            <span class="mpt-brand__name">🎬 Fábrica de Bermudas</span>
+            <span style="font-size: 0.45em; opacity: 0.8; font-weight: normal; margin-left: 6px; vertical-align: middle;">(Motor Editorial 9:16)</span>
             <a class="mpt-brand__version"
-               href="https://github.com/harry0703/MoneyPrinterTurbo"
+               href="https://github.com/lucaaregis4r-ops/geradordevideos"
                target="_blank"
                rel="noopener noreferrer"
-               aria-label="Open MoneyPrinterTurbo on GitHub"
-               title="Open project on GitHub">v{html.escape(str(config.project_version))}</a>
+               aria-label="Abrir no GitHub"
+               title="Abrir no GitHub">v{html.escape(str(config.project_version))}</a>
             {update_link}
         </h1>
         """,
@@ -8367,6 +8365,182 @@ def _render_generation_controls(
     return start_button
 
 
+def _render_fabrica_de_bermudas_tab():
+    st.markdown("### 🎬 Produção Autônoma de Shorts & Ensaios Verticais (9:16)")
+    st.caption(
+        "Transforme roteiros humanos em vídeos de alta retenção aplicando direção semântica em 5 atos, "
+        "deduplicação visual rigorosa, Safe Area 9:16 e masterização broadcast (-14.0 LUFS)."
+    )
+
+    st.write("**💡 Carregar Roteiro de Exemplo:**")
+    col_ex1, col_ex2, col_ex3 = st.columns(3)
+    with col_ex1:
+        if st.button("🏷️ O Preço da Camiseta", use_container_width=True, key="btn_ex_camiseta"):
+            st.session_state["bermudas_script_input"] = (
+                "Existe uma pergunta que quase ninguém faz sobre riqueza: de onde vem o valor das coisas? "
+                "Uma camiseta custa oitenta reais. Um celular custa cinco mil reais. Um café custa oito. "
+                "O mercado coloca um número em objetos que não têm nada em comum. "
+                "Mas antes de qualquer preço aparecer, existiram algodão, máquina, transporte e muito trabalho. "
+                "Só que quando você compra, você só vê oitenta reais. "
+                "Toda a história humana por trás do produto desaparece na etiqueta de preço."
+            )
+            st.session_state["bermudas_title_input"] = "Mercadoria: O Culto do Preço"
+            st.rerun()
+
+    with col_ex2:
+        if st.button("📱 O Fetiche do Celular", use_container_width=True, key="btn_ex_celular"):
+            st.session_state["bermudas_script_input"] = (
+                "Todo ano uma marca lança um aparelho novo e filas se formam na madrugada. "
+                "O comercial mostra vidro brilhante, inteligência artificial e liberdade. "
+                "Mas dentro do aparelho existem lítio, cobalto e mineração pesada a milhares de quilômetros. "
+                "O marketing vende um símbolo de status e futuro. "
+                "A realidade material é uma cadeia de extração invisível que ninguém quer mostrar."
+            )
+            st.session_state["bermudas_title_input"] = "O Fetiche do Smartphone"
+            st.rerun()
+
+    with col_ex3:
+        if st.button("☕ O Café de Oito Reais", use_container_width=True, key="btn_ex_cafe"):
+            st.session_state["bermudas_script_input"] = (
+                "Você entra em uma cafeteria moderna e paga oito reais em uma xícara pequena. "
+                "O ambiente tem iluminação suave, jazz de fundo e aroma perfeito. "
+                "Mas meses antes, sob o sol forte, mãos colheram cada fruto na lavoura. "
+                "O copo com seu nome apaga toda a terra e o suor da colheita."
+            )
+            st.session_state["bermudas_title_input"] = "O Café de Oito Reais"
+            st.rerun()
+
+    col_t, col_v, col_s = st.columns([2.5, 1.5, 1.2])
+    with col_t:
+        title_val = st.text_input(
+            "Título da Produção:",
+            value=st.session_state.get("bermudas_title_input", "Mercadoria: O Culto do Preço"),
+            key="fb_title",
+        )
+    with col_v:
+        voice_options = [
+            "pt-BR-AntonioNeural-Male",
+            "pt-BR-FranciscaNeural-Female",
+            "pt-BR-ThalitaNeural-Female",
+            "en-US-AndrewNeural-Male",
+        ]
+        chosen_voice = st.selectbox(
+            "Voz da Narração (TTS):",
+            options=voice_options,
+            index=0,
+            key="fb_voice",
+        )
+    with col_s:
+        style_options = ["editorial", "documentary", "minimal"]
+        chosen_style = st.selectbox(
+            "Estilo Visual:",
+            options=style_options,
+            index=0,
+            key="fb_style",
+        )
+
+    default_script = (
+        "Existe uma pergunta que quase ninguém faz sobre riqueza: de onde vem o valor das coisas? "
+        "Uma camiseta custa oitenta reais. Um celular custa cinco mil reais. Um café custa oito. "
+        "O mercado coloca um número em objetos que não têm nada em comum. "
+        "Mas antes de qualquer preço aparecer, existiram algodão, máquina, transporte e muito trabalho. "
+        "Só que quando você compra, você só vê oitenta reais. "
+        "Toda a história humana por trás do produto desaparece na etiqueta de preço."
+    )
+    script_text = st.text_area(
+        "Roteiro Falado (Narração Humana):",
+        value=st.session_state.get("bermudas_script_input", default_script),
+        height=140,
+        key="fb_script",
+        help="O texto falado não será alterado. Cada frase se torna uma cena com busca concreta de imagens.",
+    )
+
+    col_btn, col_review_link = st.columns([2, 1])
+    with col_btn:
+        start_btn = st.button("🚀 Produzir Vídeo na Fábrica de Bermudas", type="primary", use_container_width=True)
+    with col_review_link:
+        if Path("storage/projects/demo_mercadoria_1792549948").exists():
+            st.page_link(
+                "pages/1_🎬_Scene_Review.py",
+                label="🎬 Abrir Review Studio",
+                icon="🎬",
+                use_container_width=True,
+            )
+
+    if start_btn:
+        if not script_text.strip():
+            st.error("Por favor, insira o texto do roteiro antes de produzir.")
+        else:
+            from app.services.factory import ShortsFactory
+
+            task_id = f"bermudas_{int(time.time())}"
+            progress_bar = st.progress(0, text="Iniciando pipeline editorial...")
+
+            def progress_callback(etapa: str, pct: float):
+                progress_bar.progress(min(max(pct, 0.0), 1.0), text=f"[{int(pct*100)}%] {etapa}")
+
+            try:
+                factory = ShortsFactory(
+                    base_dir="storage",
+                    voice_name=chosen_voice,
+                )
+                with st.spinner("Processando cenas, áudio e montagem editorial..."):
+                    draft = factory.produce_draft(
+                        script_id=task_id,
+                        script_text=script_text.strip(),
+                        title=title_val.strip() or "Ensaio Audiovisual",
+                        brand_style=chosen_style,
+                        voice_name=chosen_voice,
+                        on_progress=progress_callback,
+                    )
+                st.session_state["latest_bermudas_draft"] = draft
+                st.success("🎉 Produção concluída com sucesso!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro durante a produção: {e}")
+                logger.exception("Erro ao produzir draft na Fábrica de Bermudas")
+
+    draft = st.session_state.get("latest_bermudas_draft")
+    if draft:
+        st.divider()
+        st.markdown("### 📹 Resultado da Produção Recente")
+        col_video, col_info = st.columns([1.2, 2.0])
+
+        with col_video:
+            video_path = draft.get("video_path")
+            if video_path and Path(video_path).exists():
+                st.video(str(video_path))
+            else:
+                st.info("Vídeo pré-visualizado no Storyboard HTML.")
+
+        with col_info:
+            score = draft.get("quality_score", {})
+            st.markdown(f"**Projeto:** `{draft.get('script_id')}`")
+            st.markdown(f"**Quality Gate:** {'✅ **APROVADO**' if score.get('passed') else '❌ **REPROVADO**'}")
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Score Semântico", f"{score.get('semantic_match_score', 0):.2f}/1.0")
+            with c2:
+                st.metric("Safe Area", f"{score.get('text_safe_area_errors', 0)} erros")
+            with c3:
+                st.metric("Duplicatas", f"{score.get('duplicate_assets', 0)}")
+
+            st.write("---")
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                st.page_link(
+                    "pages/1_🎬_Scene_Review.py",
+                    label="🎬 Revisar e Trocar Cenas (Review Studio)",
+                    icon="🎬",
+                    use_container_width=True,
+                )
+            with col_b2:
+                sb_html = draft.get("storyboard_html_path")
+                if sb_html and Path(sb_html).exists():
+                    st.caption(f"📊 Storyboard: `{sb_html}`")
+
+
 def _render_application():
     """按固定顺序渲染顶部栏、弹窗、生成表单和任务结果。"""
     _render_top_bar()
@@ -8385,38 +8559,45 @@ def _render_application():
     if restore_applied or restore_succeeded:
         st.success(tr("Task Configuration Loaded"))
 
-    with st.container(key="main_settings_grid"):
-        panel = st.columns(4)
-    left_panel = panel[0]
-    middle_panel = panel[1]
-    audio_panel = panel[2]
-    right_panel = panel[3]
+    tab_bermudas, tab_classic = st.tabs([
+        "🎬 Fábrica de Bermudas (Motor Editorial 9:16)",
+        "⚙️ Modo Clássico (MoneyPrinterTurbo)",
+    ])
 
-    params = VideoParams(video_subject="")
-    params.match_materials_to_script = bool(
-        st.session_state.get("match_materials_to_script", False)
-    )
-    _render_script_settings(left_panel, params)
+    with tab_bermudas:
+        _render_fabrica_de_bermudas_tab()
 
-    uploaded_files = _render_video_settings(middle_panel, params)
-    uploaded_audio_file, uploaded_bgm_file, voice_mode = _render_audio_settings(
-        audio_panel, params
-    )
+    with tab_classic:
+        with st.container(key="main_settings_grid"):
+            panel = st.columns(4)
+        left_panel = panel[0]
+        middle_panel = panel[1]
+        audio_panel = panel[2]
+        right_panel = panel[3]
 
-    _render_subtitle_settings(right_panel, params)
+        params = VideoParams(video_subject="")
+        params.match_materials_to_script = bool(
+            st.session_state.get("match_materials_to_script", False)
+        )
+        _render_script_settings(left_panel, params)
 
-    generation_submitted = _render_generation_controls(
-        params,
-        uploaded_files,
-        uploaded_audio_file,
-        uploaded_bgm_file,
-        voice_mode,
-    )
+        uploaded_files = _render_video_settings(middle_panel, params)
+        uploaded_audio_file, uploaded_bgm_file, voice_mode = _render_audio_settings(
+            audio_panel, params
+        )
 
-    # 生成分支在启动后台线程前已经请求过保存。普通控件交互继续请求非阻塞保存；
-    # 如果后台任务正在使用配置，配置层会在任务结束时自动应用并落盘最新值。
-    if not generation_submitted:
-        _save_runtime_config()
+        _render_subtitle_settings(right_panel, params)
+
+        generation_submitted = _render_generation_controls(
+            params,
+            uploaded_files,
+            uploaded_audio_file,
+            uploaded_bgm_file,
+            voice_mode,
+        )
+
+        if not generation_submitted:
+            _save_runtime_config()
 
 
 _render_application()

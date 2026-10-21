@@ -10,18 +10,19 @@ from typing import Any, Optional
 
 @dataclass
 class MediaCandidate:
-    provider: str
-    asset_id: str
-    query: str
-    width: int
-    height: int
-    duration: float
-    url: str
+    provider: str = "unknown"
+    asset_id: str = ""
+    query: str = ""
+    width: int = 1080
+    height: int = 1920
+    duration: float = 0.0
+    url: str = ""
     thumbnail: str = ""
     source_page: str = ""
     technical_score: float = 0.0
     semantic_score: float = 0.0
     final_score: float = 0.0
+    category: str = ""
     local_path: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:

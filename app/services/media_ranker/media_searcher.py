@@ -68,6 +68,8 @@ class MediaSearcher:
             raw = self.candidate_builder.search_query(
                 query=q,
                 target_duration=target_duration,
+                visual_type=scene.visual_type,
+                preferred_motion=scene.preferred_motion,
             )
             all_raw_candidates.extend(raw)
 
@@ -84,13 +86,23 @@ class MediaSearcher:
             top_k=max(10, candidates_per_scene * 2),
         )
 
-        # 5. Second stage: semantic multimodal ranker (take top candidates_per_scene)
+        # 5. Second stage: semantic multimodal ranker (take top candidates_per_scene * 2)
         sem_ranked = self.semantic_ranker.rank_candidates(
             scene_narration=scene.narration,
             scene_intent=scene.intent,
             candidates=tech_filtered,
-            top_k=candidates_per_scene,
+            top_k=max(10, candidates_per_scene * 2),
         )
+
+        # 5b. Repetition & diversity scoring with callback bypass
+        visual_cat = scene.entities[0] if getattr(scene, "entities", None) else getattr(scene, "narrative_function", "")
+        scored = self.deduplicator.score_candidates(
+            candidates=sem_ranked,
+            visual_category=visual_cat,
+            intentional_callback=getattr(scene, "intentional_callback", None),
+        )
+        scored.sort(key=lambda c: c.final_score, reverse=True)
+        sem_ranked = scored[:candidates_per_scene]
 
         # 6. If scene is graphic/formula/number/quote, prepend programmatic card as #1 candidate
         if self.graphics_engine.is_graphic_scene(scene):
@@ -128,7 +140,12 @@ class MediaSearcher:
 
             if candidates:
                 top_candidate = candidates[0]
-                self.deduplicator.mark_used(top_candidate)
+                visual_cat = scene.entities[0] if getattr(scene, "entities", None) else getattr(scene, "narrative_function", "")
+                self.deduplicator.mark_used(
+                    top_candidate,
+                    scene_id=scene.scene_id,
+                    visual_category=visual_cat,
+                )
 
                 # Download or stage locally if needed
                 if download_selected and not top_candidate.local_path:
