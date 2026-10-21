@@ -225,3 +225,306 @@ class ReviewManager:
             "built_stages": built_stages,
             "stages_count": len(reused_stages) + len(built_stages),
         }
+
+    def direct_script(
+        self,
+        script_id: str,
+        script_text: str,
+        title: str = "",
+        channel: str = "default",
+        brand_preset: str = "editorial",
+    ) -> Dict[str, Any]:
+        """Directs a script into scenes.json (Etapa 1) without fetching heavy media or audio."""
+        from app.services.director.scene_director import SceneDirector
+        from app.services.editorial.script_manager import ScriptManager
+
+        sm = ScriptManager(storage_dir=self.storage_dir / "scripts")
+        director = SceneDirector(script_manager=sm)
+        folder = self.projects_dir / script_id
+        folder.mkdir(parents=True, exist_ok=True)
+
+        plan = director.direct_script(
+            script_id=script_id,
+            script_text=script_text,
+            title=title,
+            channel=channel,
+            brand_preset=brand_preset,
+            save_plan=True,
+            output_dir=folder,
+        )
+
+        return {
+            "project_id": script_id,
+            "plan": plan,
+            "plan_path": str(folder / "scenes.json"),
+            "total_scenes": len(plan.scenes),
+            "estimated_duration": plan.estimated_duration,
+        }
+
+    def update_scene_metadata(
+        self,
+        project_id: str,
+        scene_id: str,
+        queries: Optional[List[str]] = None,
+        component_type: Optional[str] = None,
+        visual_type: Optional[str] = None,
+        text_overlay: Optional[str] = None,
+        text_level: Optional[str] = None,
+        preferred_motion: Optional[str] = None,
+        intent: Optional[str] = None,
+    ) -> ScenePlan:
+        """Updates editable editorial metadata for a scene. Narration is strictly immutable."""
+        folder = self.projects_dir / project_id
+        scenes_file = folder / "scenes.json"
+        with scenes_file.open("r", encoding="utf-8") as f:
+            plan_data = json.load(f)
+        plan = ScenePlan.from_dict(plan_data)
+
+        scene = next((s for s in plan.scenes if s.scene_id == scene_id), None)
+        if not scene:
+            raise ValueError(f"Scene '{scene_id}' not found in project '{project_id}'")
+
+        if queries is not None:
+            scene.queries = [q.strip() for q in queries if q.strip()]
+        if visual_type is not None:
+            scene.visual_type = visual_type
+        if component_type is not None:
+            setattr(scene, "component_type", component_type)
+        if text_overlay is not None:
+            scene.text_overlay = text_overlay.strip() if text_overlay.strip() else None
+        if text_level is not None:
+            scene.text_level = text_level
+        if preferred_motion is not None:
+            scene.preferred_motion = preferred_motion
+        if intent is not None:
+            scene.intent = intent
+
+        with scenes_file.open("w", encoding="utf-8") as f:
+            f.write(plan.to_json(indent=2))
+
+        return plan
+
+    def update_beat_metadata(
+        self,
+        project_id: str,
+        scene_id: str,
+        beat_id: str,
+        queries: Optional[List[str]] = None,
+        component_type: Optional[str] = None,
+        visual_type: Optional[str] = None,
+        text_overlay: Optional[str] = None,
+        intent: Optional[str] = None,
+    ) -> ScenePlan:
+        """Updates editable editorial metadata for a VisualBeat."""
+        folder = self.projects_dir / project_id
+        scenes_file = folder / "scenes.json"
+        with scenes_file.open("r", encoding="utf-8") as f:
+            plan_data = json.load(f)
+        plan = ScenePlan.from_dict(plan_data)
+
+        scene = next((s for s in plan.scenes if s.scene_id == scene_id), None)
+        if not scene:
+            raise ValueError(f"Scene '{scene_id}' not found in project '{project_id}'")
+
+        beat = next((b for b in scene.visual_beats if b.beat_id == beat_id), None)
+        if not beat:
+            raise ValueError(f"Beat '{beat_id}' not found in scene '{scene_id}'")
+
+        if queries is not None:
+            beat.queries = [q.strip() for q in queries if q.strip()]
+        if component_type is not None:
+            beat.component_type = component_type
+        if visual_type is not None:
+            beat.visual_type = visual_type
+        if text_overlay is not None:
+            beat.text_overlay = text_overlay.strip() if text_overlay.strip() else None
+        if intent is not None:
+            beat.intent = intent
+
+        with scenes_file.open("w", encoding="utf-8") as f:
+            f.write(plan.to_json(indent=2))
+
+        return plan
+
+    def search_media_for_scene(
+        self,
+        project_id: str,
+        scene_id: str,
+        candidates_per_scene: int = 5,
+        download_selected: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Re-searches media candidates for a specific scene."""
+        from app.services.media_ranker.media_searcher import MediaSearcher
+
+        folder = self.projects_dir / project_id
+        scenes_file = folder / "scenes.json"
+        with scenes_file.open("r", encoding="utf-8") as f:
+            plan_data = json.load(f)
+        plan = ScenePlan.from_dict(plan_data)
+
+        scene = next((s for s in plan.scenes if s.scene_id == scene_id), None)
+        if not scene:
+            raise ValueError(f"Scene '{scene_id}' not found in project '{project_id}'")
+
+        searcher = MediaSearcher(media_cache_dir=self.media_cache_dir)
+        dur = float(scene.end - scene.start) if (scene.end and scene.start) else scene.duration_hint
+        candidates = searcher.search_for_scene(scene, target_duration=dur, candidates_per_scene=candidates_per_scene)
+        scene.media_candidates = [c.to_dict() for c in candidates]
+        if candidates and not scene.selected_media:
+            scene.selected_media = candidates[0].to_dict()
+
+        with scenes_file.open("w", encoding="utf-8") as f:
+            f.write(plan.to_json(indent=2))
+
+        return scene.media_candidates
+
+    def search_media_for_all_scenes(
+        self,
+        project_id: str,
+        candidates_per_scene: int = 5,
+        download_selected: bool = True,
+    ) -> ScenePlan:
+        """Runs candidate collection for all scenes in the project."""
+        from app.services.media_ranker.media_searcher import MediaSearcher
+
+        folder = self.projects_dir / project_id
+        scenes_file = folder / "scenes.json"
+        with scenes_file.open("r", encoding="utf-8") as f:
+            plan_data = json.load(f)
+        plan = ScenePlan.from_dict(plan_data)
+
+        searcher = MediaSearcher(media_cache_dir=self.media_cache_dir)
+        enriched = searcher.populate_scene_plan(
+            plan=plan,
+            candidates_per_scene=candidates_per_scene,
+            download_selected=download_selected,
+            save_plan_path=scenes_file,
+        )
+        return enriched
+
+    def swap_beat_media(
+        self,
+        project_id: str,
+        scene_id: str,
+        beat_id: str,
+        new_footage_path: str | Path,
+        new_candidate_info: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Swaps the selected media for a specific VisualBeat."""
+        folder = self.projects_dir / project_id
+        scenes_file = folder / "scenes.json"
+        with scenes_file.open("r", encoding="utf-8") as f:
+            plan_data = json.load(f)
+        plan = ScenePlan.from_dict(plan_data)
+
+        scene = next((s for s in plan.scenes if s.scene_id == scene_id), None)
+        if not scene:
+            raise ValueError(f"Scene '{scene_id}' not found")
+        beat = next((b for b in scene.visual_beats if b.beat_id == beat_id), None)
+        if not beat:
+            raise ValueError(f"Beat '{beat_id}' not found in scene '{scene_id}'")
+
+        f_path = str(Path(new_footage_path).resolve())
+        if new_candidate_info:
+            updated = dict(new_candidate_info)
+            updated["local_path"] = f_path
+            beat.selected_media = updated
+        else:
+            beat.selected_media = {
+                "asset_id": Path(f_path).stem,
+                "local_path": f_path,
+                "url": f_path,
+                "type": beat.visual_type,
+            }
+
+        with scenes_file.open("w", encoding="utf-8") as f:
+            f.write(plan.to_json(indent=2))
+
+        return {"project_id": project_id, "scene_id": scene_id, "beat_id": beat_id, "selected_media": beat.selected_media}
+
+    def evaluate_project_quality(self, project_id: str) -> Dict[str, Any]:
+        """Evaluates Quality Gate and generates pre-render reports for a project."""
+        from app.services.assembly.planner import AssemblyPlanner
+        from app.services.assembly.pre_visualizer import PreVisualizer
+        from app.services.assembly.quality_checker import QualityChecker
+        from app.services.editorial.credits_generator import CreditsGenerator
+        from app.services.media_ranker.asset_catalog import AssetCatalog
+
+        folder = self.projects_dir / project_id
+        scenes_file = folder / "scenes.json"
+        if not scenes_file.exists():
+            raise FileNotFoundError(f"scenes.json not found for project '{project_id}'")
+
+        with scenes_file.open("r", encoding="utf-8") as f:
+            plan_data = json.load(f)
+        plan = ScenePlan.from_dict(plan_data)
+
+        planner = AssemblyPlanner()
+        assembly_plan = planner.build_plan(plan)
+        checker = QualityChecker()
+        score = checker.evaluate(assembly_plan)
+
+        pre_vis = PreVisualizer()
+        storyboard = pre_vis.save_reports(
+            plan=assembly_plan,
+            output_dir=folder,
+            scene_plan=plan,
+            title=getattr(plan, "title", project_id),
+        )
+
+        catalog = AssetCatalog(db_path=self.storage_dir / "asset_catalog.db")
+        cred_gen = CreditsGenerator(catalog=catalog)
+        credits_files = cred_gen.save_credits(
+            plan=assembly_plan,
+            output_dir=folder,
+            project_title=getattr(plan, "title", project_id),
+        )
+
+        assembly_file = folder / "assembly_plan.json"
+        with assembly_file.open("w", encoding="utf-8") as f:
+            f.write(assembly_plan.to_json(indent=2))
+
+        return {
+            "project_id": project_id,
+            "quality_score": score.to_dict(),
+            "passed": score.passed,
+            "alerts": score.alerts,
+            "assembly_plan_path": str(assembly_file),
+            "storyboard_html_path": str(storyboard["html"]),
+            "storyboard_md_path": str(storyboard["markdown"]),
+            "credits_md_path": str(credits_files["credits_md"]),
+            "manifest_json_path": str(credits_files["manifest_json"]),
+            "total_segments": len(assembly_plan.segments),
+            "total_duration": assembly_plan.total_duration,
+        }
+
+    def list_projects_summary(self) -> List[Dict[str, Any]]:
+        """Returns summary of all projects with status, duration, and preset."""
+        summaries = []
+        for folder in sorted(self.projects_dir.iterdir()):
+            if folder.is_dir() and (folder / "scenes.json").exists():
+                try:
+                    with (folder / "scenes.json").open("r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    has_video = (folder / f"{folder.name}_mastered.mp4").exists()
+                    if not has_video:
+                        render_meta = folder / "render_project" / "project.json"
+                        if render_meta.exists():
+                            with render_meta.open("r", encoding="utf-8") as rf:
+                                rdata = json.load(rf)
+                                if rdata.get("last_successful_export"):
+                                    has_video = True
+                    summaries.append(
+                        {
+                            "project_id": folder.name,
+                            "title": data.get("title", folder.name),
+                            "total_scenes": len(data.get("scenes", [])),
+                            "estimated_duration": data.get("estimated_duration", 0.0),
+                            "brand_preset": data.get("brand_preset", "editorial"),
+                            "created_at": data.get("created_at", ""),
+                            "has_video": has_video,
+                        }
+                    )
+                except Exception:
+                    summaries.append({"project_id": folder.name, "title": folder.name, "total_scenes": 0, "has_video": False})
+        return summaries
