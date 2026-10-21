@@ -126,6 +126,10 @@ class MediaDeduplicator:
         if visual_category:
             self._category_usage[visual_category] += 1
 
+    def is_used(self, asset_id: str) -> bool:
+        """Returns True if the asset or key has been marked as used."""
+        return asset_id in self._global_seen_assets
+
     def block_asset(self, asset_id: str) -> None:
         """Permanently blocks an asset from being selected in this production."""
         self._blocked_assets.add(asset_id)

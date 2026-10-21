@@ -89,6 +89,7 @@ class AssemblyPlanner:
         semantic_score = float(media.get("semantic_score", media.get("final_score", 0.0)))
         thumbnail = media.get("thumbnail", "")
         phase = getattr(scene, "narrative_phase", "")
+        is_synthetic = bool(media.get("is_synthetic", False))
 
         return AssemblySegment(
             segment_id=f"seg_{scene.scene_id}",
@@ -108,6 +109,7 @@ class AssemblyPlanner:
             semantic_score=semantic_score,
             thumbnail=thumbnail,
             phase=phase,
+            is_synthetic=is_synthetic,
         )
 
     def _compute_duration(self, scene: Scene) -> float:

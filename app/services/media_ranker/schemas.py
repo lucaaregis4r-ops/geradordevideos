@@ -24,6 +24,8 @@ class MediaCandidate:
     final_score: float = 0.0
     category: str = ""
     local_path: Optional[str] = None
+    is_synthetic: bool = False
+    error_detail: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -43,5 +45,8 @@ class MediaCandidate:
             technical_score=float(data.get("technical_score", 0.0)),
             semantic_score=float(data.get("semantic_score", 0.0)),
             final_score=float(data.get("final_score", 0.0)),
+            category=data.get("category", ""),
             local_path=data.get("local_path"),
+            is_synthetic=bool(data.get("is_synthetic", False)),
+            error_detail=data.get("error_detail"),
         )

@@ -34,6 +34,7 @@ class AssemblySegment:
     semantic_score: float = 0.0
     thumbnail: str = ""
     phase: str = ""
+    is_synthetic: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -58,6 +59,7 @@ class AssemblySegment:
             semantic_score=float(data.get("semantic_score", 0.0)),
             thumbnail=data.get("thumbnail", ""),
             phase=data.get("phase", ""),
+            is_synthetic=bool(data.get("is_synthetic", False)),
         )
 
 
@@ -71,7 +73,9 @@ class QualityScore:
     text_safe_area_errors: int = 0
     low_resolution_count: int = 0
     segments_without_visual: int = 0
+    synthetic_assets: int = 0
     passed: bool = False
+    alerts: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

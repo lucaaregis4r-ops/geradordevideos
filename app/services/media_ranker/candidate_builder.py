@@ -19,6 +19,7 @@ from typing import List, Optional
 from app.config import config
 from app.models.schema import VideoAspect
 from app.services import material
+from loguru import logger
 from .schemas import MediaCandidate
 
 
@@ -242,8 +243,8 @@ class CandidateBuilder:
                                 final_score=0.97,
                             )
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed to render Ken Burns clip for {}: {}", img_file, e)
 
         return results
 
@@ -251,7 +252,7 @@ class CandidateBuilder:
         self,
         query: str,
         target_duration: float = 4.0,
-        enable_synthetic_fallback: bool = True,
+        enable_synthetic_fallback: bool = False,
         visual_type: str = "stock_video",
         preferred_motion: str = "zoom_in",
     ) -> List[MediaCandidate]:
@@ -290,8 +291,8 @@ class CandidateBuilder:
                             source_page=(item.source_info or {}).get("source_page", ""),
                         )
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Pexels search failed for query='{}': {}", query, e)
 
         # 3. Check Pixabay
         pixabay_keys = config.app.get("pixabay_api_keys", [])
@@ -316,10 +317,10 @@ class CandidateBuilder:
                             source_page=(item.source_info or {}).get("source_page", ""),
                         )
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Pixabay search failed for query='{}': {}", query, e)
 
-        # 4. Fallback generator if no external API returns results
+        # 4. Fallback generator only if explicitly enabled
         if not candidates and enable_synthetic_fallback:
             slug = hashlib.md5(f"{query}_{visual_type}".encode()).hexdigest()[:10]
             is_meme_intent = (
@@ -336,7 +337,7 @@ class CandidateBuilder:
                 )
                 provider_tag = "synthetic_meme"
                 syn_duration = meme_dur
-                tech_score = 0.95
+                tech_score = 0.20
             elif is_photo_intent:
                 synthetic_path = self.media_cache_dir / f"photo_syn_{slug}.mp4"
                 syn_duration = max(5.0, target_duration + 1.0)
@@ -347,7 +348,8 @@ class CandidateBuilder:
                     motion=preferred_motion,
                 )
                 provider_tag = "synthetic_photo"
-                tech_score = 0.92
+                syn_duration = syn_duration
+                tech_score = 0.15
             else:
                 synthetic_path = self.media_cache_dir / f"synthetic_{slug}.mp4"
                 syn_duration = max(5.0, target_duration + 1.0)
@@ -357,7 +359,12 @@ class CandidateBuilder:
                     duration=syn_duration,
                 )
                 provider_tag = "synthetic_local"
-                tech_score = 0.92
+                tech_score = 0.10
+
+            logger.warning(
+                "No real media candidate found for query='{}' (type={}). Generated synthetic placeholder: {}",
+                query, visual_type, synthetic_path
+            )
 
             candidates.append(
                 MediaCandidate(
@@ -371,7 +378,10 @@ class CandidateBuilder:
                     local_path=str(synthetic_path),
                     technical_score=tech_score,
                     final_score=tech_score,
+                    is_synthetic=True,
                 )
             )
+        elif not candidates:
+            logger.info("No media candidates found for query='{}' (type={})", query, visual_type)
 
         return candidates

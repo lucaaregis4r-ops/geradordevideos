@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from loguru import logger
 from app.config import config
 from app.services import voice
 from app.services.assembly.planner import AssemblyPlanner
@@ -36,8 +37,10 @@ class ShortsFactory:
         self,
         base_dir: str | Path = "storage",
         voice_name: str = "pt-BR-AntonioNeural-Male",
+        allow_placeholders: bool = False,
     ):
         self.base_dir = Path(base_dir).resolve()
+        self.allow_placeholders = allow_placeholders
         self.projects_dir = self.base_dir / "projects"
         self.scripts_dir = self.base_dir / "scripts"
         self.media_cache_dir = self.base_dir / "media_cache"
@@ -49,7 +52,10 @@ class ShortsFactory:
         self.script_manager = ScriptManager(storage_dir=self.scripts_dir)
         self.pronunciation_engine = PronunciationEngine()
         self.director = SceneDirector(script_manager=self.script_manager)
-        self.searcher = MediaSearcher(media_cache_dir=self.media_cache_dir)
+        self.searcher = MediaSearcher(
+            media_cache_dir=self.media_cache_dir,
+            enable_synthetic_fallback=self.allow_placeholders,
+        )
         self.assembly_planner = AssemblyPlanner(deduplicator=self.searcher.deduplicator)
         self.quality_checker = QualityChecker()
         self.pre_visualizer = PreVisualizer()
@@ -67,6 +73,8 @@ class ShortsFactory:
         voice_name: Optional[str] = None,
         bgm_path: Optional[str | Path] = None,
         bgm_volume: float = 0.20,
+        enforce_quality_gate: bool = True,
+        allow_unpassed_draft: bool = False,
         on_progress: Optional[Callable[[str, float], None]] = None,
     ) -> dict[str, Any]:
         """Executes the complete pipeline:
@@ -114,7 +122,8 @@ class ShortsFactory:
             try:
                 master_voice_track(audio_path, mastered_path, target_lufs=-14.0)
                 final_audio_path = mastered_path
-            except Exception:
+            except Exception as e:
+                logger.warning("Voice mastering failed for scene {}: {}. Using unmastered audio.", scene.scene_id, e)
                 final_audio_path = audio_path
 
             scene.overlay = scene.overlay or {}
@@ -149,6 +158,28 @@ class ShortsFactory:
             title=title or getattr(plan, "title", ""),
         )
 
+        # Enforce Quality Gate: block rendering if rejected unless explicitly allowed as preview
+        if enforce_quality_gate and not allow_unpassed_draft and not quality_score.passed:
+            alert_summary = ", ".join(quality_score.alerts) if quality_score.alerts else "unspecified quality violations"
+            logger.warning(
+                "Quality Gate REJECTED draft for script '{}': {}",
+                script_id, alert_summary
+            )
+            return {
+                "script_id": script_id,
+                "revision_id": None,
+                "status": "rejected_by_quality_gate",
+                "plan_path": str(project_folder / "scenes.json"),
+                "assembly_plan_path": str(assembly_plan_path),
+                "storyboard_md_path": str(storyboard_files["markdown"]),
+                "storyboard_html_path": str(storyboard_files["html"]),
+                "quality_score": quality_score.to_dict(),
+                "video_path": None,
+                "total_scenes": plan.total_scenes,
+                "estimated_duration": plan.estimated_duration,
+                "error": f"Quality Gate failed: {alert_summary}",
+            }
+
         # 5. Assemble Project Manifest for VideoProject
         if on_progress:
             on_progress("Creating editable project manifest...", 0.85)
@@ -167,15 +198,19 @@ class ShortsFactory:
             seg_duration = float(segment.end - segment.start)
 
             if not footage_path or not Path(footage_path).exists():
-                # Fallback to synthetic clip if not local
-                fallback_clip = self.media_cache_dir / f"fallback_{scene_key}.mp4"
-                from .media_ranker.candidate_builder import _generate_synthetic_clip
-                query = scene.queries[0] if (scene and scene.queries) else (narration or segment.segment_id)
-                _generate_synthetic_clip(query, fallback_clip)
-                footage_path = str(fallback_clip)
+                if self.allow_placeholders or allow_unpassed_draft:
+                    # Fallback to synthetic clip if permitted for test/preview
+                    fallback_clip = self.media_cache_dir / f"fallback_{scene_key}.mp4"
+                    from .media_ranker.candidate_builder import _generate_synthetic_clip
+                    query = scene.queries[0] if (scene and scene.queries) else (narration or segment.segment_id)
+                    _generate_synthetic_clip(query, fallback_clip)
+                    footage_path = str(fallback_clip)
+                    logger.warning("Segment '{}' using synthetic placeholder fallback: {}", scene_key, fallback_clip)
+                else:
+                    logger.error("Segment '{}' missing valid footage file: {}", scene_key, footage_path)
 
             # If asset is a static image, convert to vertical Ken Burns video clip
-            if is_image_file(footage_path):
+            if footage_path and Path(footage_path).exists() and is_image_file(footage_path):
                 ken_burns_dir.mkdir(parents=True, exist_ok=True)
                 kb_clip = ken_burns_dir / f"{scene_key}_kb.mp4"
                 motion = getattr(scene, "preferred_motion", "zoom_in") if scene else "zoom_in"
@@ -187,11 +222,11 @@ class ShortsFactory:
                         motion=motion,
                     )
                     footage_path = str(kb_clip)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Ken Burns animation failed for '{}': {}", footage_path, e)
 
             # If segment has text overlay, render safe area PNG and composite onto clip
-            if segment.overlay_text and segment.overlay_text.strip():
+            if segment.overlay_text and segment.overlay_text.strip() and footage_path and Path(footage_path).exists():
                 try:
                     overlays_dir.mkdir(parents=True, exist_ok=True)
                     composited_dir.mkdir(parents=True, exist_ok=True)
@@ -208,15 +243,16 @@ class ShortsFactory:
                         output_path=comp_clip,
                     )
                     footage_path = str(comp_clip)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Typography overlay composition failed for segment '{}': {}", scene_key, e)
 
+            resolved_path = str(Path(footage_path).resolve()) if (footage_path and Path(footage_path).exists()) else (footage_path or "")
             project_scenes.append(
                 {
                     "id": scene_key,
                     "narration": narration,
                     "duration": seg_duration,
-                    "footage": str(Path(footage_path).resolve()),
+                    "footage": resolved_path,
                     "audio": audio_path,
                 }
             )
@@ -274,13 +310,14 @@ class ShortsFactory:
                     output_path=remuxed_video,
                 )
                 final_video_path = str(remuxed_video)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Adaptive BGM automation failed for script '{}': {}", script_id, e)
 
+        final_status = "preview_unpassed_quality" if (not quality_score.passed and allow_unpassed_draft) else render_status["state"]
         return {
             "script_id": script_id,
             "revision_id": rev_id,
-            "status": render_status["state"],
+            "status": final_status,
             "plan_path": str(project_folder / "scenes.json"),
             "assembly_plan_path": str(assembly_plan_path),
             "storyboard_md_path": str(storyboard_files["markdown"]),

@@ -22,6 +22,7 @@ DEFAULT_THRESHOLDS = {
     "max_text_safe_area_errors": 0,
     "max_low_resolution": 2,
     "min_semantic_match_avg": 0.4,
+    "max_synthetic_assets": 0,
 }
 
 
@@ -46,10 +47,12 @@ class QualityChecker:
             text_safe_area_errors=self._validate_text_safe_area(plan),
             low_resolution_count=0,    # Placeholder — needs asset metadata
             segments_without_visual=self._count_missing_visuals(plan),
+            synthetic_assets=self._count_synthetic_assets(plan),
         )
 
         # Determine pass/fail
         alerts = self._check_alerts(score)
+        score.alerts = alerts
         score.passed = len(alerts) == 0
 
         # Log results
@@ -117,6 +120,16 @@ class QualityChecker:
             if not s.asset_path or s.asset_id.startswith("missing_")
         )
 
+    def _count_synthetic_assets(self, plan: AssemblyPlan) -> int:
+        """Counts segments using synthetic placeholder clips."""
+        return sum(
+            1 for s in plan.segments
+            if (s.asset_id and s.asset_id.startswith("syn_"))
+            or "fallback_" in (s.asset_path or "")
+            or "synthetic_" in (s.asset_path or "")
+            or getattr(s, "is_synthetic", False)
+        )
+
     def _check_alerts(self, score: QualityScore) -> List[str]:
         """Returns list of threshold violations."""
         alerts: List[str] = []
@@ -137,6 +150,12 @@ class QualityChecker:
             alerts.append(
                 f"segments_without_visual={score.segments_without_visual} "
                 f"(max={self.thresholds['max_segments_without_visual']})"
+            )
+
+        if "max_synthetic_assets" in self.thresholds and score.synthetic_assets > self.thresholds["max_synthetic_assets"]:
+            alerts.append(
+                f"synthetic_assets={score.synthetic_assets} "
+                f"(max={self.thresholds['max_synthetic_assets']})"
             )
 
         if score.text_safe_area_errors > self.thresholds["max_text_safe_area_errors"]:

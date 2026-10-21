@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from app.services import material
 from app.services.director.schemas import Scene, ScenePlan
+from loguru import logger
 from .candidate_builder import CandidateBuilder
 from .deduplicator import MediaDeduplicator
 from .schemas import MediaCandidate
@@ -30,8 +31,10 @@ class MediaSearcher:
         semantic_ranker: Optional[SemanticRanker] = None,
         graphics_engine: Optional[Any] = None,
         media_cache_dir: str | Path = "storage/media_cache",
+        enable_synthetic_fallback: bool = False,
     ):
         self.media_cache_dir = Path(media_cache_dir).resolve()
+        self.enable_synthetic_fallback = enable_synthetic_fallback
         self.candidate_builder = candidate_builder or CandidateBuilder(
             media_cache_dir=self.media_cache_dir
         )
@@ -68,6 +71,7 @@ class MediaSearcher:
             raw = self.candidate_builder.search_query(
                 query=q,
                 target_duration=target_duration,
+                enable_synthetic_fallback=self.enable_synthetic_fallback,
                 visual_type=scene.visual_type,
                 preferred_motion=scene.preferred_motion,
             )
@@ -138,28 +142,53 @@ class MediaSearcher:
             # Store candidates in scene
             scene.media_candidates = [c.to_dict() for c in candidates]
 
+            selected_cand: Optional[MediaCandidate] = None
             if candidates:
-                top_candidate = candidates[0]
                 visual_cat = scene.entities[0] if getattr(scene, "entities", None) else getattr(scene, "narrative_function", "")
-                self.deduplicator.mark_used(
-                    top_candidate,
-                    scene_id=scene.scene_id,
-                    visual_category=visual_cat,
-                )
 
-                # Download or stage locally if needed
-                if download_selected and not top_candidate.local_path:
-                    try:
-                        # Remote URL download using material service
-                        downloaded = material.save_video(
-                            video_url=top_candidate.url,
-                            save_dir=str(self.media_cache_dir),
-                        )
-                        top_candidate.local_path = downloaded
-                    except Exception:
-                        pass
+                for candidate in candidates:
+                    # Check if already local
+                    if candidate.local_path and Path(candidate.local_path).exists():
+                        selected_cand = candidate
+                        break
 
-                scene.selected_media = top_candidate.to_dict()
+                    # Download if needed
+                    if download_selected and candidate.url:
+                        try:
+                            logger.info("Downloading candidate {} from {} for scene {}", candidate.asset_id, candidate.url, scene.scene_id)
+                            downloaded = material.save_video(
+                                video_url=candidate.url,
+                                save_dir=str(self.media_cache_dir),
+                            )
+                            if downloaded and Path(downloaded).exists():
+                                candidate.local_path = downloaded
+                                selected_cand = candidate
+                                break
+                            else:
+                                logger.warning("Download of candidate {} returned invalid path", candidate.asset_id)
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to download candidate {} ({}): {}. Trying next candidate...",
+                                candidate.asset_id, candidate.url, e
+                            )
+                            candidate.error_detail = str(e)
+                    elif not download_selected:
+                        selected_cand = candidate
+                        break
+
+                if selected_cand:
+                    self.deduplicator.mark_used(
+                        selected_cand,
+                        scene_id=scene.scene_id,
+                        visual_category=visual_cat,
+                    )
+                    scene.selected_media = selected_cand.to_dict()
+                else:
+                    logger.error("All media candidates failed to download or are unavailable for scene {}", scene.scene_id)
+                    scene.selected_media = {}
+            else:
+                logger.warning("No media candidates found for scene {}", scene.scene_id)
+                scene.selected_media = {}
 
         if save_plan_path:
             p = Path(save_plan_path)
