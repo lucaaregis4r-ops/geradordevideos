@@ -40,9 +40,15 @@ class AssemblyPlanner:
         current_time = 0.0
 
         for scene in scene_plan.scenes:
-            segment = self._scene_to_segment(scene, current_time)
-            segments.append(segment)
-            current_time = segment.end
+            if getattr(scene, "has_multiple_beats", False) and scene.visual_beats:
+                beat_segments = self._scene_beats_to_segments(scene, current_time)
+                segments.extend(beat_segments)
+                if beat_segments:
+                    current_time = beat_segments[-1].end
+            else:
+                segment = self._scene_to_segment(scene, current_time)
+                segments.append(segment)
+                current_time = segment.end
 
         total_duration = current_time if segments else 0.0
 
@@ -112,6 +118,90 @@ class AssemblyPlanner:
             is_synthetic=is_synthetic,
         )
 
+    def _scene_beats_to_segments(self, scene: Scene, start_time: float) -> list[AssemblySegment]:
+        """Converts a scene with multiple VisualBeats into multiple AssemblySegments."""
+        scene_duration = self._compute_duration(scene)
+        beats = scene.visual_beats
+        total_beat_hint = sum(b.duration for b in beats) or 1.0
+
+        segments: list[AssemblySegment] = []
+        current_beat_start = start_time
+
+        for i, beat in enumerate(beats):
+            is_last = (i == len(beats) - 1)
+            if is_last:
+                beat_duration = max(0.5, round((start_time + scene_duration) - current_beat_start, 2))
+            else:
+                raw_dur = (beat.duration / total_beat_hint) * scene_duration
+                beat_duration = max(0.5, round(raw_dur, 2))
+
+            beat_end = round(current_beat_start + beat_duration, 2)
+
+            media = beat.selected_media or scene.selected_media or {}
+            asset_id = media.get("asset_id", media.get("url", f"missing_{beat.beat_id}"))
+            asset_path = media.get("local_path", media.get("url", ""))
+            asset_type = self._resolve_beat_asset_type(beat, scene, media)
+
+            category = self._infer_visual_category(scene)
+            if media:
+                from app.services.media_ranker.schemas import MediaCandidate
+                dummy = MediaCandidate(
+                    asset_id=asset_id,
+                    url=media.get("url", ""),
+                    query=beat.queries[0] if beat.queries else (scene.queries[0] if scene.queries else ""),
+                )
+                self._dedup.mark_used(
+                    candidate=dummy,
+                    scene_id=beat.beat_id,
+                    visual_category=category,
+                )
+
+            query = media.get("query", beat.queries[0] if beat.queries else (scene.queries[0] if scene.queries else ""))
+            semantic_score = float(media.get("semantic_score", media.get("final_score", 0.0)))
+            thumbnail = media.get("thumbnail", "")
+            phase = getattr(scene, "narrative_phase", "")
+            is_synthetic = bool(media.get("is_synthetic", False))
+            overlay_text = beat.text_overlay or (scene.text_overlay if i == 0 else None)
+            text_level = beat.text_level or scene.text_level
+            transition = self._choose_transition(scene) if is_last else "cut"
+
+            segments.append(
+                AssemblySegment(
+                    segment_id=f"seg_{beat.beat_id}",
+                    start=round(current_beat_start, 2),
+                    end=beat_end,
+                    asset_id=asset_id,
+                    asset_type=asset_type,
+                    asset_path=asset_path,
+                    crop="9:16",
+                    overlay_text=overlay_text,
+                    text_level=text_level,
+                    transition=transition,
+                    purpose=scene.narrative_function,
+                    scene_ref=scene.scene_id,
+                    is_callback=bool(scene.intentional_callback),
+                    query=query,
+                    semantic_score=semantic_score,
+                    thumbnail=thumbnail,
+                    phase=phase,
+                    is_synthetic=is_synthetic,
+                )
+            )
+            current_beat_start = beat_end
+
+        return segments
+
+    def _resolve_beat_asset_type(self, beat: Any, scene: Scene, media: dict) -> str:
+        """Determines asset type for a visual beat."""
+        if beat.component_type:
+            return beat.component_type
+        if media.get("type"):
+            return media["type"]
+        vt = (beat.visual_type or scene.visual_type).lower()
+        if vt == "component":
+            return beat.component_type or "graphic"
+        return self._resolve_asset_type(scene, media)
+
     def _compute_duration(self, scene: Scene) -> float:
         """Determines segment duration based on narrative function and content."""
         # Humor: keep it short (≤ 1.5s)
@@ -153,6 +243,12 @@ class AssemblyPlanner:
             "stock_image": "photo",
             "gif": "gif",
             "graphic": "graphic",
+            "component": "component",
+            "price_tag": "price_tag",
+            "split_screen": "split_screen",
+            "historical_archive": "historical_archive",
+            "data_card": "data_card",
+            "editorial_crop": "editorial_crop",
             "formula": "text_card",
             "number": "text_card",
             "quote": "text_card",

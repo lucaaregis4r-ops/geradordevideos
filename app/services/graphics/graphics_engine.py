@@ -11,6 +11,13 @@ from typing import TYPE_CHECKING, Optional, Union
 
 from app.services.director.schemas import Scene, VisualType
 from .base_card import BaseCardRenderer
+from .components import (
+    DataCardComponent,
+    EditorialCropComponent,
+    HistoricalArchiveComponent,
+    PriceTagComponent,
+    SplitScreenComponent,
+)
 from .formula_card import FormulaCardRenderer
 from .number_card import NumberCardRenderer
 from .quote_card import QuoteCardRenderer
@@ -32,6 +39,14 @@ class GraphicsEngine:
         VisualType.TITLE.value,
     }
 
+    EDITORIAL_COMPONENTS = {
+        "price_tag": PriceTagComponent,
+        "split_screen": SplitScreenComponent,
+        "historical_archive": HistoricalArchiveComponent,
+        "data_card": DataCardComponent,
+        "editorial_crop": EditorialCropComponent,
+    }
+
     def __init__(self, cache_dir: Optional[Path | str] = None):
         self.cache_dir = Path(cache_dir or "storage/media_cache/graphics").resolve()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -49,10 +64,41 @@ class GraphicsEngine:
         """Checks if a scene should be rendered via the graphics engine."""
         if cls.is_graphic_type(scene.visual_type):
             return True
+        if getattr(scene, "component_type", None) in cls.EDITORIAL_COMPONENTS:
+            return True
+        if getattr(scene, "visual_type", "") in cls.EDITORIAL_COMPONENTS:
+            return True
         text = (scene.narration or "").lower()
-        if any(marker in text for marker in ["[formula", "[graphic", "[quote", "[number", "[card"]):
+        if any(marker in text for marker in ["[formula", "[graphic", "[quote", "[number", "[card", "[split", "[recibo", "[arquivo"]):
             return True
         return False
+
+    def render_editorial_component(
+        self,
+        component_type: str,
+        output_path: Optional[Path | str] = None,
+        duration: float = 3.0,
+        motion: str = "zoom_in",
+        **kwargs,
+    ) -> Path:
+        """Renders an editorial visual component clip (price_tag, split_screen, archive, etc.)."""
+        comp_cls = self.EDITORIAL_COMPONENTS.get(component_type, EditorialCropComponent)
+        renderer = comp_cls()
+        if output_path is None:
+            token = f"{component_type}_{duration}_{kwargs}"
+            safe_id = hashlib.md5(token.encode()).hexdigest()[:12]
+            output_path = self.cache_dir / f"comp_{component_type}_{safe_id}.mp4"
+
+        target_file = Path(output_path).resolve()
+        if target_file.exists() and target_file.stat().st_size > 1000:
+            return target_file
+
+        return renderer.render_video(
+            output_path=target_file,
+            duration=duration,
+            motion=motion,
+            **kwargs,
+        )
 
     def render_scene_card(
         self,
@@ -72,6 +118,53 @@ class GraphicsEngine:
             return target_file
 
         vtype = scene.visual_type.value if hasattr(scene.visual_type, "value") else str(scene.visual_type)
+        comp_type = getattr(scene, "component_type", None) or vtype
+
+        # Route to editorial component if matched
+        if comp_type in self.EDITORIAL_COMPONENTS:
+            if comp_type == "price_tag":
+                return self.render_editorial_component(
+                    "price_tag",
+                    output_path=target_file,
+                    duration=duration,
+                    price_text=scene.text_overlay or "R$ 79,90",
+                    item_title=scene.intent or "PRODUTO",
+                    subtitle=scene.narration[:60] if len(scene.narration) > 10 else None,
+                )
+            elif comp_type == "historical_archive":
+                return self.render_editorial_component(
+                    "historical_archive",
+                    output_path=target_file,
+                    duration=duration,
+                    date_badge=scene.text_overlay or "DOCUMENTO HISTÓRICO",
+                    caption=scene.intent or scene.narration[:60],
+                )
+            elif comp_type == "data_card":
+                return self.render_editorial_component(
+                    "data_card",
+                    output_path=target_file,
+                    duration=duration,
+                    headline_metric=scene.text_overlay or "DADOS",
+                    title=scene.intent or "ANÁLISE DE DADOS",
+                    description=scene.narration[:60],
+                )
+            elif comp_type == "split_screen":
+                return self.render_editorial_component(
+                    "split_screen",
+                    output_path=target_file,
+                    duration=duration,
+                    top_label=scene.intent or "PARTE 1",
+                    bottom_label=scene.narration[:30],
+                )
+            elif comp_type == "editorial_crop":
+                return self.render_editorial_component(
+                    "editorial_crop",
+                    output_path=target_file,
+                    duration=duration,
+                    title=scene.intent or "DETALHE",
+                    caption=scene.text_overlay,
+                )
+
         theme = get_theme(theme_name) if theme_name else None
 
         # Route by visual type

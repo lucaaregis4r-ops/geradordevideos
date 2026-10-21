@@ -30,6 +30,24 @@ from app.services.utils.ken_burns import create_ken_burns_clip, is_image_file
 from app.services.video_project import VideoProject
 
 
+def _measure_audio_duration(path: Path | str) -> float:
+    """Measures exact duration in seconds of an audio file using ffprobe."""
+    import subprocess
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        dur = float(result.stdout.strip())
+        return max(0.1, round(dur, 2))
+    except Exception as exc:
+        logger.warning("Failed to probe audio duration for {}: {}", path, exc)
+        return 0.0
+
+
 class ShortsFactory:
     """Master orchestrator for the Shorts Factory."""
 
@@ -112,6 +130,7 @@ class ShortsFactory:
         audio_dir = project_folder / "audio"
         audio_dir.mkdir(parents=True, exist_ok=True)
 
+        accum_time = 0.0
         for scene in plan.scenes:
             audio_path = audio_dir / f"{scene.scene_id}.mp3"
             # Apply pronunciation engine to translate formulas/acronyms for the TTS
@@ -134,6 +153,18 @@ class ShortsFactory:
             scene.overlay = scene.overlay or {}
             scene.overlay["spoken_text"] = spoken_text
             scene.overlay["audio_file"] = str(final_audio_path)
+
+            measured_dur = _measure_audio_duration(final_audio_path)
+            if measured_dur > 0:
+                scene.overlay["audio_duration"] = measured_dur
+                scene.start = round(accum_time, 2)
+                scene.end = round(accum_time + measured_dur, 2)
+                accum_time += measured_dur
+            elif scene.end is not None and scene.start is not None:
+                accum_time = scene.end
+
+        if accum_time > 0:
+            plan.estimated_duration = round(accum_time, 2)
 
         # 3. Media Search & Candidate Collection
         if on_progress:
@@ -208,8 +239,36 @@ class ShortsFactory:
             narration = scene.narration if scene else ""
             audio_path = (scene.overlay or {}).get("audio_file") if scene else None
             footage_path = segment.asset_path
-            scene_key = segment.scene_ref or segment.segment_id
+            scene_key = segment.segment_id
             seg_duration = float(segment.end - segment.start)
+
+            # If asset is an editorial component, render it programmatically
+            if segment.asset_type in ("price_tag", "split_screen", "historical_archive", "data_card", "editorial_crop"):
+                comp_video = project_folder / "components" / f"{segment.segment_id}_{segment.asset_type}.mp4"
+                comp_video.parent.mkdir(parents=True, exist_ok=True)
+                if not comp_video.exists():
+                    try:
+                        from app.services.graphics.graphics_engine import GraphicsEngine
+                        ge = GraphicsEngine()
+                        rendered = ge.render_editorial_component(
+                            component_type=segment.asset_type,
+                            output_path=comp_video,
+                            duration=seg_duration,
+                            metadata={
+                                "text": segment.overlay_text or narration,
+                                "title": narration[:30] if narration else "",
+                                "subtitle": segment.overlay_text or "",
+                                "value": segment.overlay_text or "100%",
+                                "label": narration[:20] if narration else "MÉTRICA",
+                                "year": "1980",
+                                "label_left": "ANTES",
+                                "label_right": "DEPOIS",
+                            },
+                        )
+                        if rendered and Path(rendered).exists():
+                            footage_path = str(rendered)
+                    except Exception as e:
+                        logger.warning("Failed to render component {}: {}", segment.asset_type, e)
 
             if not footage_path or not Path(footage_path).exists():
                 if self.allow_placeholders or allow_unpassed_draft:
@@ -239,26 +298,51 @@ class ShortsFactory:
                 except Exception as e:
                     logger.warning("Ken Burns animation failed for '{}': {}", footage_path, e)
 
-            # If segment has text overlay, render safe area PNG and composite onto clip
-            if segment.overlay_text and segment.overlay_text.strip() and footage_path and Path(footage_path).exists():
-                try:
-                    overlays_dir.mkdir(parents=True, exist_ok=True)
-                    composited_dir.mkdir(parents=True, exist_ok=True)
-                    overlay_png = overlays_dir / f"{scene_key}_overlay.png"
-                    self.typography_engine.render_overlay_to_file(
-                        text=segment.overlay_text,
-                        output_path=overlay_png,
-                        level=segment.text_level,
-                    )
-                    comp_clip = composited_dir / f"{scene_key}_comp.mp4"
-                    composite_overlay_to_clip(
-                        video_path=footage_path,
-                        overlay_png_path=overlay_png,
-                        output_path=comp_clip,
-                    )
-                    footage_path = str(comp_clip)
-                except Exception as e:
-                    logger.warning("Typography overlay composition failed for segment '{}': {}", scene_key, e)
+            # If segment has text overlay and is not a component card, render safe area PNG and composite onto clip
+            if segment.asset_type not in ("price_tag", "split_screen", "historical_archive", "data_card", "editorial_crop"):
+                if segment.overlay_text and segment.overlay_text.strip() and footage_path and Path(footage_path).exists():
+                    try:
+                        overlays_dir.mkdir(parents=True, exist_ok=True)
+                        composited_dir.mkdir(parents=True, exist_ok=True)
+                        overlay_png = overlays_dir / f"{scene_key}_overlay.png"
+                        self.typography_engine.render_overlay_to_file(
+                            text=segment.overlay_text,
+                            output_path=overlay_png,
+                            level=segment.text_level,
+                        )
+                        comp_clip = composited_dir / f"{scene_key}_comp.mp4"
+                        composite_overlay_to_clip(
+                            video_path=footage_path,
+                            overlay_png_path=overlay_png,
+                            output_path=comp_clip,
+                        )
+                        footage_path = str(comp_clip)
+                    except Exception as e:
+                        logger.warning("Typography overlay composition failed for segment '{}': {}", scene_key, e)
+
+            # Handle audio for multi-beat scene segments
+            seg_audio_file = audio_path
+            if scene and getattr(scene, "has_multiple_beats", False) and audio_path and Path(audio_path).exists():
+                scene_st = scene.start if scene.start is not None else 0.0
+                rel_st = max(0.0, round(segment.start - scene_st, 2))
+                beat_audio = audio_dir / f"{scene_key}_audio.mp3"
+                if not beat_audio.exists():
+                    try:
+                        import subprocess
+                        cmd_slice = [
+                            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                            "-ss", str(rel_st),
+                            "-t", str(seg_duration),
+                            "-i", str(audio_path),
+                            "-c:a", "libmp3lame", "-q:a", "2",
+                            str(beat_audio),
+                        ]
+                        subprocess.run(cmd_slice, check=True)
+                        seg_audio_file = str(beat_audio)
+                    except Exception as e:
+                        logger.warning("Audio slice failed for segment {}: {}", scene_key, e)
+                else:
+                    seg_audio_file = str(beat_audio)
 
             resolved_path = str(Path(footage_path).resolve()) if (footage_path and Path(footage_path).exists()) else (footage_path or "")
             project_scenes.append(

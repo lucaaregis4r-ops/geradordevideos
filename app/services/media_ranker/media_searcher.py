@@ -253,6 +253,30 @@ class MediaSearcher:
                 logger.warning("No media candidates found for scene {}", scene.scene_id)
                 scene.selected_media = {}
 
+            # If scene has multiple visual beats, assign selected_media to each beat
+            if getattr(scene, "has_multiple_beats", False) and scene.visual_beats:
+                unused_candidates = [
+                    c for c in candidates 
+                    if (selected_cand is None or c.asset_id != selected_cand.asset_id)
+                ]
+                for beat_idx, beat in enumerate(scene.visual_beats):
+                    if beat.selected_media:
+                        continue
+                    if beat.component_type:
+                        beat.selected_media = {
+                            "asset_id": f"comp_{beat.beat_id}",
+                            "type": beat.component_type,
+                            "local_path": "",
+                            "query": beat.component_type,
+                            "is_synthetic": False,
+                            "semantic_score": 0.95,
+                        }
+                    elif beat_idx > 0 and unused_candidates:
+                        beat_cand = unused_candidates.pop(0)
+                        beat.selected_media = beat_cand.to_dict()
+                    else:
+                        beat.selected_media = scene.selected_media
+
         if save_plan_path:
             p = Path(save_plan_path)
             p.parent.mkdir(parents=True, exist_ok=True)

@@ -78,6 +78,49 @@ class MotionType(str, Enum):
 
 
 @dataclass
+class VisualBeat:
+    """A visual shot within a spoken narration scene.
+
+    Allows a single spoken phrase (e.g. 7 seconds) to contain 2 or 3 distinct visual shots
+    without splitting, hallucinating, or re-synthesizing the audio narration.
+    """
+    beat_id: str
+    duration: float = 2.0
+    intent: str = ""
+    queries: list[str] = field(default_factory=list)
+    visual_type: str = "stock_video"
+    component_type: str = "standard"     # standard, editorial_crop, split_screen, data_card, price_tag, historical_archive
+    preferred_motion: str = "lateral"
+    shot_scale: str = "medium"           # wide, medium, close_up, extreme_close_up
+    text_overlay: Optional[str] = None
+    text_level: str = "caption"
+    transition: str = "cut"
+    selected_media: Optional[dict[str, Any]] = None
+    media_candidates: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> VisualBeat:
+        return cls(
+            beat_id=data["beat_id"],
+            duration=float(data.get("duration", 2.0)),
+            intent=data.get("intent", ""),
+            queries=list(data.get("queries", [])),
+            visual_type=str(data.get("visual_type", "stock_video")).lower(),
+            component_type=str(data.get("component_type", "standard")).lower(),
+            preferred_motion=str(data.get("preferred_motion", "lateral")).lower(),
+            shot_scale=str(data.get("shot_scale", "medium")).lower(),
+            text_overlay=data.get("text_overlay"),
+            text_level=str(data.get("text_level", "caption")).lower(),
+            transition=str(data.get("transition", "cut")).lower(),
+            selected_media=data.get("selected_media"),
+            media_candidates=list(data.get("media_candidates", [])),
+        )
+
+
+@dataclass
 class Scene:
     scene_id: str
     narration: str
@@ -101,9 +144,16 @@ class Scene:
     intentional_callback: Optional[str] = None
     entities: list[str] = field(default_factory=list)
     duration_hint: float = 3.0
+    visual_beats: list[VisualBeat] = field(default_factory=list)
+
+    @property
+    def has_multiple_beats(self) -> bool:
+        return len(self.visual_beats) > 1
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["visual_beats"] = [b.to_dict() for b in self.visual_beats]
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Scene:
@@ -114,6 +164,9 @@ class Scene:
         m_type = data.get("preferred_motion", "lateral")
         if isinstance(m_type, MotionType):
             m_type = m_type.value
+
+        raw_beats = data.get("visual_beats", [])
+        beats = [VisualBeat.from_dict(b) if isinstance(b, dict) else b for b in raw_beats]
 
         return cls(
             scene_id=data["scene_id"],
@@ -138,6 +191,7 @@ class Scene:
             intentional_callback=data.get("intentional_callback"),
             entities=list(data.get("entities", [])),
             duration_hint=float(data.get("duration_hint", 3.0)),
+            visual_beats=beats,
         )
 
 

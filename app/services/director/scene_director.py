@@ -14,8 +14,9 @@ from typing import Any, Optional
 
 from app.config import config
 from app.services.editorial.script_manager import ScriptManager, ScriptVersion
-from .prompt_builder import SYSTEM_INSTRUCTION, build_director_prompt
-from .schemas import Scene, ScenePlan, VisualType
+from .presets import get_preset
+from .prompt_builder import SYSTEM_INSTRUCTION, build_director_prompt, build_system_instruction
+from .schemas import Scene, ScenePlan, VisualBeat, VisualType
 from .scene_validator import realign_narration_with_original, validate_scene_plan
 from .visual_intent import estimate_duration_seconds, infer_visual_type
 
@@ -46,6 +47,9 @@ class LocalRuleDirectorProvider(DirectorProvider):
         self, script: ScriptVersion, settings: Optional[dict[str, Any]] = None
     ) -> ScenePlan:
         clean_text = script.clean_narration.strip()
+        brand_preset_name = settings.get("brand_preset", "editorial") if settings else "editorial"
+        preset = get_preset(brand_preset_name)
+
         # Split text into meaningful sentences
         raw_sentences = [
             s.strip()
@@ -58,6 +62,7 @@ class LocalRuleDirectorProvider(DirectorProvider):
         scenes: list[Scene] = []
         accumulated_time = 0.0
         total_count = len(raw_sentences)
+        phases = preset.narrative_phases
 
         for idx, sentence in enumerate(raw_sentences):
             scene_id = f"scene_{idx + 1:03d}"
@@ -65,29 +70,26 @@ class LocalRuleDirectorProvider(DirectorProvider):
             v_type = infer_visual_type(sentence)
             lower_s = sentence.lower()
 
+            # Map position to preset narrative phase
+            phase_idx = min(len(phases) - 1, int((idx / max(1, total_count)) * len(phases)))
+            n_phase = phases[phase_idx]
+
             # Infer narrative function and humor
             is_joke = any(k in lower_s for k in ["nervoso", "petróleo", "caiu", "ridícula", "piada"])
             if idx == 0:
                 n_func = "hook"
-                n_phase = "aspiration"
             elif idx == total_count - 1:
                 n_func = "conclusion"
-                n_phase = "reveal"
             elif is_joke:
                 n_func = "joke"
-                n_phase = "commodity"
             elif any(k in lower_s for k in ["r$", "custa", "reais", "preço", "valor"]):
                 n_func = "example"
-                n_phase = "commodity"
             elif any(k in lower_s for k in ["fábrica", "máquina", "algodão", "produção"]):
                 n_func = "explanation"
-                n_phase = "production"
             elif any(k in lower_s for k in ["trabalho", "costureira", "operário", "trabalhador"]):
                 n_func = "reveal"
-                n_phase = "labor"
             else:
                 n_func = "explanation"
-                n_phase = "commodity"
 
             # Extract price or keywords for text overlay
             price_match = re.search(r"R\$\s*\d+([.,]\d+)?", sentence)
@@ -142,6 +144,44 @@ class LocalRuleDirectorProvider(DirectorProvider):
             if not queries:
                 queries = ["retail store product display"]
 
+            # Multi-beat planning: if scene duration is >= 4.5s and has multiple clauses, split into visual beats
+            visual_beats: list[VisualBeat] = []
+            if dur >= 4.5 and ("," in sentence or " e " in lower_s or " mas " in lower_s or " enquanto " in lower_s):
+                beat_a = VisualBeat(
+                    beat_id=f"{scene_id}_a",
+                    queries=[queries[0]],
+                    visual_type=v_type.value,
+                    duration=round(dur * 0.5, 2),
+                    text_overlay=t_overlay,
+                    text_level=t_level,
+                    intent=f"Plano 1: {queries[0]}",
+                )
+
+                # Detect if beat 2 should be an editorial component
+                comp_type = None
+                if price_match:
+                    comp_type = "price_tag"
+                elif any(k in lower_s for k in ["enquanto", "ao contrário", "versus", "vs", "diferente"]):
+                    comp_type = "split_screen"
+                elif any(k in lower_s for k in ["passado", "história", "antigamente", "século", "década"]):
+                    comp_type = "historical_archive"
+                elif any(k in lower_s for k in ["%", "estatística", "dados", "gráfico", "números"]):
+                    comp_type = "data_card"
+
+                beat_b_type = "component" if comp_type else v_type.value
+                beat_b_queries = [queries[1]] if len(queries) > 1 else [queries[0]]
+                beat_b = VisualBeat(
+                    beat_id=f"{scene_id}_b",
+                    queries=beat_b_queries,
+                    visual_type=beat_b_type,
+                    component_type=comp_type,
+                    duration=round(dur * 0.5, 2),
+                    text_overlay=None,
+                    text_level="caption",
+                    intent=f"Plano 2: {comp_type or beat_b_queries[0]}",
+                )
+                visual_beats = [beat_a, beat_b]
+
             scene = Scene(
                 scene_id=scene_id,
                 narration=sentence,
@@ -161,6 +201,7 @@ class LocalRuleDirectorProvider(DirectorProvider):
                 intentional_callback=None,
                 entities=entities,
                 duration_hint=1.2 if is_joke else (4.0 if n_func == "reveal" else dur),
+                visual_beats=visual_beats,
             )
             scenes.append(scene)
             accumulated_time += dur
@@ -172,7 +213,7 @@ class LocalRuleDirectorProvider(DirectorProvider):
             total_scenes=len(scenes),
             estimated_duration=round(accumulated_time, 2),
             scenes=scenes,
-            brand_preset=settings.get("brand_preset", "editorial") if settings else "editorial",
+            brand_preset=brand_preset_name,
             created_at=datetime.now(timezone.utc).isoformat(),
         )
         return plan
@@ -202,7 +243,8 @@ class GeminiDirectorProvider(DirectorProvider):
             brand_style=brand_style,
         )
 
-        full_prompt = f"{SYSTEM_INSTRUCTION}\n\n{user_prompt}"
+        sys_instruction = build_system_instruction(brand_style)
+        full_prompt = f"{sys_instruction}\n\n{user_prompt}"
 
         # Request JSON generation with automatic model fallback on temporary 503 high demand
         candidate_models = [self.model_name] + [
@@ -274,6 +316,29 @@ class GeminiDirectorProvider(DirectorProvider):
             if isinstance(entities_val, str):
                 entities_val = [e.strip() for e in entities_val.split(",") if e.strip()]
 
+            # Parse visual_beats if provided
+            visual_beats_raw = sc.get("visual_beats", [])
+            visual_beats: list[VisualBeat] = []
+            if isinstance(visual_beats_raw, list):
+                for b_idx, b in enumerate(visual_beats_raw):
+                    if isinstance(b, dict):
+                        b_id = b.get("beat_id", f"{scene_id}_{chr(97 + b_idx)}")
+                        b_queries = b.get("queries", [sc["narration"][:20]])
+                        if isinstance(b_queries, str):
+                            b_queries = [b_queries]
+                        visual_beats.append(
+                            VisualBeat(
+                                beat_id=b_id,
+                                queries=b_queries,
+                                visual_type=b.get("visual_type", "stock_video"),
+                                component_type=b.get("component_type"),
+                                duration=float(b.get("duration", dur / max(1, len(visual_beats_raw)))),
+                                text_overlay=b.get("text_overlay"),
+                                text_level=b.get("text_level", "caption"),
+                                intent=b.get("intent", ""),
+                            )
+                        )
+
             scene = Scene(
                 scene_id=scene_id,
                 narration=sc["narration"],
@@ -293,6 +358,7 @@ class GeminiDirectorProvider(DirectorProvider):
                 intentional_callback=sc.get("intentional_callback"),
                 entities=entities_val,
                 duration_hint=dur_hint,
+                visual_beats=visual_beats,
             )
             scenes.append(scene)
             accumulated_time += dur
