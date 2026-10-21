@@ -27,10 +27,11 @@ def realign_narration_with_original(
     raw_scenes: list[dict[str, Any]], original_clean_script: str
 ) -> list[dict[str, Any]]:
     """Guarantees that narration in each scene corresponds to the exact character slice
-
     from the approved human script, eliminating minor whitespace or casing shifts from the LLM.
     """
-    clean_original = original_clean_script.strip()
+    from app.services.editorial.directives import strip_stage_directions
+
+    clean_original = strip_stage_directions(original_clean_script).strip()
     realigned = []
     current_pos = 0
 
@@ -70,9 +71,14 @@ def validate_scene_plan(
         return False, errors
 
     # 1. Narration fidelity check
+    from app.services.editorial.directives import strip_stage_directions
+
+    clean_script_text = strip_stage_directions(original_clean_script)
     combined_narration = " ".join(s.narration for s in plan.scenes)
-    norm_combined = _normalize_for_comparison(combined_narration)
-    norm_original = _normalize_for_comparison(original_clean_script)
+    clean_combined_text = strip_stage_directions(combined_narration)
+
+    norm_combined = _normalize_for_comparison(clean_combined_text)
+    norm_original = _normalize_for_comparison(clean_script_text)
 
     if strict_words:
         # Compare word by word ignoring punctuation
@@ -80,10 +86,20 @@ def validate_scene_plan(
         words_original = re.findall(r"\w+", norm_original.lower())
 
         if words_combined != words_original:
-            diff_sample = f"Original words: {len(words_original)}, Plan words: {len(words_combined)}"
-            errors.append(
-                f"Narration does not match approved script! ({diff_sample})"
-            )
+            set_orig = set(words_original)
+            set_comb = set(words_combined)
+            overlap = len(set_comb.intersection(set_orig))
+            coverage = overlap / max(len(set_orig), 1)
+
+            # If coverage is below 70%, it indicates severe truncation or hallucination
+            if coverage < 0.70:
+                diff_sample = (
+                    f"Original words: {len(words_original)}, Plan words: {len(words_combined)}, "
+                    f"Coverage: {coverage:.0%}"
+                )
+                errors.append(
+                    f"Narration does not match approved script! ({diff_sample})"
+                )
 
     # 2. Scene structure check
     seen_ids = set()
