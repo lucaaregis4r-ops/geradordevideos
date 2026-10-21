@@ -60,6 +60,8 @@ class ShortsFactory:
         self.quality_checker = QualityChecker()
         self.pre_visualizer = PreVisualizer()
         self.typography_engine = TypographyEngine()
+        from app.services.editorial.credits_generator import CreditsGenerator
+        self.credits_generator = CreditsGenerator(catalog=self.searcher.asset_catalog)
         self.voice_name = voice_name
 
     def produce_draft(
@@ -158,6 +160,13 @@ class ShortsFactory:
             title=title or getattr(plan, "title", ""),
         )
 
+        # Generate credits and license manifest
+        credits_files = self.credits_generator.save_credits(
+            plan=assembly_plan,
+            output_dir=project_folder,
+            project_title=title or getattr(plan, "title", ""),
+        )
+
         # Enforce Quality Gate: block rendering if rejected unless explicitly allowed as preview
         if enforce_quality_gate and not allow_unpassed_draft and not quality_score.passed:
             alert_summary = ", ".join(quality_score.alerts) if quality_score.alerts else "unspecified quality violations"
@@ -173,6 +182,8 @@ class ShortsFactory:
                 "assembly_plan_path": str(assembly_plan_path),
                 "storyboard_md_path": str(storyboard_files["markdown"]),
                 "storyboard_html_path": str(storyboard_files["html"]),
+                "credits_md_path": str(credits_files["credits_md"]),
+                "manifest_json_path": str(credits_files["manifest_json"]),
                 "quality_score": quality_score.to_dict(),
                 "video_path": None,
                 "total_scenes": plan.total_scenes,
@@ -322,6 +333,8 @@ class ShortsFactory:
             "assembly_plan_path": str(assembly_plan_path),
             "storyboard_md_path": str(storyboard_files["markdown"]),
             "storyboard_html_path": str(storyboard_files["html"]),
+            "credits_md_path": str(credits_files["credits_md"]),
+            "manifest_json_path": str(credits_files["manifest_json"]),
             "quality_score": quality_score.to_dict(),
             "video_path": final_video_path,
             "total_scenes": plan.total_scenes,

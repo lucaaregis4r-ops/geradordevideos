@@ -31,10 +31,16 @@ class MediaSearcher:
         semantic_ranker: Optional[SemanticRanker] = None,
         graphics_engine: Optional[Any] = None,
         media_cache_dir: str | Path = "storage/media_cache",
+        asset_catalog: Optional[Any] = None,
         enable_synthetic_fallback: bool = False,
     ):
         self.media_cache_dir = Path(media_cache_dir).resolve()
         self.enable_synthetic_fallback = enable_synthetic_fallback
+        if asset_catalog is None:
+            from .asset_catalog import AssetCatalog
+            self.asset_catalog = AssetCatalog(db_path=self.media_cache_dir.parent / "asset_catalog.db")
+        else:
+            self.asset_catalog = asset_catalog
         self.candidate_builder = candidate_builder or CandidateBuilder(
             media_cache_dir=self.media_cache_dir
         )
@@ -177,6 +183,14 @@ class MediaSearcher:
                         break
 
                 if selected_cand:
+                    if selected_cand.local_path and Path(selected_cand.local_path).exists():
+                        try:
+                            self.asset_catalog.register_downloaded_asset(
+                                selected_cand, Path(selected_cand.local_path)
+                            )
+                        except Exception as e:
+                            logger.warning("Failed to register asset in catalog: {}", e)
+
                     self.deduplicator.mark_used(
                         selected_cand,
                         scene_id=scene.scene_id,
