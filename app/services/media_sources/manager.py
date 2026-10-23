@@ -13,6 +13,7 @@ from app.services.media_ranker.schemas import MediaCandidate
 from .base import MediaSourceProvider
 from .openverse import OpenverseProvider
 from .pexels_photos import PexelsPhotoProvider
+from .pixabay_photos import PixabayPhotoProvider
 from .wikimedia_commons import WikimediaCommonsProvider
 
 
@@ -24,6 +25,7 @@ class MediaSourcesManager:
             self.providers = providers
         else:
             self.providers = [
+                PixabayPhotoProvider(),
                 PexelsPhotoProvider(),
                 WikimediaCommonsProvider(),
                 OpenverseProvider(),

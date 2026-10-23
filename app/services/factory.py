@@ -15,6 +15,7 @@ from app.services import voice
 from app.services.assembly.planner import AssemblyPlanner
 from app.services.assembly.pre_visualizer import PreVisualizer
 from app.services.assembly.quality_checker import QualityChecker
+from app.services.assembly.schemas import AssemblyPlan
 from app.services.audio.mastering import (
     master_voice_track,
     mix_voice_with_adaptive_bgm,
@@ -125,13 +126,15 @@ class ShortsFactory:
         )
 
         # 2. Voice Synthesis for each scene
-        if on_progress:
-            on_progress("Synthesizing voice audio with Edge TTS...", 0.40)
         audio_dir = project_folder / "audio"
         audio_dir.mkdir(parents=True, exist_ok=True)
 
         accum_time = 0.0
-        for scene in plan.scenes:
+        total_scenes = len(plan.scenes)
+        for idx, scene in enumerate(plan.scenes):
+            if on_progress:
+                voice_pct = 0.20 + (idx / max(1, total_scenes)) * 0.35
+                on_progress(f"Sintetizando voz: cena {idx+1}/{total_scenes} ({scene.scene_id})...", voice_pct)
             audio_path = audio_dir / f"{scene.scene_id}.mp3"
             # Apply pronunciation engine to translate formulas/acronyms for the TTS
             spoken_text = self.pronunciation_engine.to_spoken(scene.narration)
@@ -167,13 +170,16 @@ class ShortsFactory:
             plan.estimated_duration = round(accum_time, 2)
 
         # 3. Media Search & Candidate Collection
-        if on_progress:
-            on_progress("Searching media candidates across queries...", 0.60)
+        def search_progress(sub_msg: str, frac: float):
+            if on_progress:
+                on_progress(sub_msg, 0.55 + frac * 0.20)
+
         self.searcher.populate_scene_plan(
             plan=plan,
             candidates_per_scene=5,
             download_selected=True,
             save_plan_path=project_folder / "scenes.json",
+            on_progress=search_progress,
         )
 
         # 4. Generate AssemblyPlan and Run Quality Check
@@ -234,7 +240,11 @@ class ShortsFactory:
         composited_dir = project_folder / "composited"
         ken_burns_dir = project_folder / "ken_burns"
 
-        for segment in assembly_plan.segments:
+        total_segments = len(assembly_plan.segments)
+        for seg_idx, segment in enumerate(assembly_plan.segments):
+            if on_progress:
+                comp_pct = 0.75 + (seg_idx / max(1, total_segments)) * 0.15
+                on_progress(f"Compondo cena {seg_idx+1}/{total_segments} ({segment.segment_id})...", comp_pct)
             scene = scene_by_id.get(segment.scene_ref)
             narration = scene.narration if scene else ""
             audio_path = (scene.overlay or {}).get("audio_file") if scene else None
@@ -427,3 +437,126 @@ class ShortsFactory:
             "total_scenes": plan.total_scenes,
             "estimated_duration": plan.estimated_duration,
         }
+
+    def render_existing_draft(
+        self,
+        script_id: str,
+        on_progress: Optional[Callable[[str, float], None]] = None,
+    ) -> dict[str, Any]:
+        """Renders video from an existing assembly plan without re-fetching media or TTS."""
+        project_folder = self.projects_dir / script_id
+        plan_file = project_folder / "scenes.json"
+        assembly_file = project_folder / "assembly_plan.json"
+
+        if not plan_file.exists() or not assembly_file.exists():
+            raise FileNotFoundError(f"Project files missing for {script_id}")
+
+        with plan_file.open("r", encoding="utf-8") as f:
+            plan = ScenePlan.from_dict(json.load(f))
+        with assembly_file.open("r", encoding="utf-8") as f:
+            assembly_plan = AssemblyPlan.from_dict(json.load(f))
+
+        if on_progress:
+            on_progress("Preparando composição das cenas existentes...", 0.1)
+
+        project_scenes = []
+        scene_by_id = {s.scene_id: s for s in plan.scenes}
+        overlays_dir = project_folder / "overlays"
+        composited_dir = project_folder / "composited"
+        ken_burns_dir = project_folder / "ken_burns"
+        audio_dir = project_folder / "audio"
+
+        total_segments = len(assembly_plan.segments)
+        for seg_idx, segment in enumerate(assembly_plan.segments):
+            if on_progress:
+                comp_pct = 0.1 + (seg_idx / max(1, total_segments)) * 0.6
+                on_progress(f"Compondo cena {seg_idx+1}/{total_segments}...", comp_pct)
+
+            scene = scene_by_id.get(segment.scene_ref)
+            narration = scene.narration if scene else ""
+            audio_path = (scene.overlay or {}).get("audio_file") if scene else None
+            footage_path = segment.asset_path
+            scene_key = segment.segment_id
+            seg_duration = float(segment.end - segment.start)
+
+            if not footage_path or not Path(footage_path).exists():
+                fallback_clip = self.media_cache_dir / f"fallback_{scene_key}.mp4"
+                from .media_ranker.candidate_builder import _generate_synthetic_clip
+                query = scene.queries[0] if (scene and scene.queries) else (narration or segment.segment_id)
+                _generate_synthetic_clip(query, fallback_clip)
+                footage_path = str(fallback_clip)
+
+            if footage_path and Path(footage_path).exists() and is_image_file(footage_path):
+                ken_burns_dir.mkdir(parents=True, exist_ok=True)
+                kb_clip = ken_burns_dir / f"{scene_key}_kb.mp4"
+                motion = getattr(scene, "preferred_motion", "zoom_in") if scene else "zoom_in"
+                try:
+                    create_ken_burns_clip(
+                        image_path=footage_path,
+                        output_path=kb_clip,
+                        duration=max(seg_duration, 3.0),
+                        motion=motion,
+                    )
+                    footage_path = str(kb_clip)
+                except Exception as e:
+                    logger.warning("Ken Burns animation failed for '{}': {}", footage_path, e)
+
+            if segment.asset_type not in ("price_tag", "split_screen", "historical_archive", "data_card", "editorial_crop"):
+                if segment.overlay_text and segment.overlay_text.strip() and footage_path and Path(footage_path).exists():
+                    try:
+                        overlays_dir.mkdir(parents=True, exist_ok=True)
+                        composited_dir.mkdir(parents=True, exist_ok=True)
+                        overlay_png = overlays_dir / f"{scene_key}_overlay.png"
+                        self.typography_engine.render_overlay_to_file(
+                            text=segment.overlay_text,
+                            output_path=overlay_png,
+                            level=segment.text_level,
+                        )
+                        comp_clip = composited_dir / f"{scene_key}_comp.mp4"
+                        composite_overlay_to_clip(
+                            video_path=footage_path,
+                            overlay_png_path=overlay_png,
+                            output_path=comp_clip,
+                        )
+                        footage_path = str(comp_clip)
+                    except Exception as e:
+                        logger.warning("Typography overlay composition failed for segment '{}': {}", scene_key, e)
+
+            resolved_path = str(Path(footage_path).resolve()) if (footage_path and Path(footage_path).exists()) else (footage_path or "")
+            project_scenes.append(
+                {
+                    "id": scene_key,
+                    "narration": narration,
+                    "duration": seg_duration,
+                    "footage": resolved_path,
+                    "audio": audio_path,
+                }
+            )
+
+        video_project = VideoProject(project_folder / "render_project")
+        rev_spec = video_project.create_revision(
+            {
+                "project_id": script_id,
+                "settings": {"width": 1080, "height": 1920, "fps": 30},
+                "scenes": project_scenes,
+            }
+        )
+        rev_id = rev_spec["revision_id"]
+
+        if on_progress:
+            on_progress("Renderizando vídeo final com FFmpeg...", 0.75)
+        render_status = video_project.render(rev_id)
+
+        if on_progress:
+            on_progress("Renderização concluída com sucesso!", 1.0)
+
+        export_info = render_status.get("export", {})
+        final_video_path = export_info.get("path")
+
+        return {
+            "script_id": script_id,
+            "revision_id": rev_id,
+            "status": "rendered_force_preview",
+            "video_path": final_video_path,
+        }
+

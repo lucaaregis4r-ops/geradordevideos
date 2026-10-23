@@ -381,7 +381,56 @@ class CandidateBuilder:
             except Exception as e:
                 logger.warning("Supplementary photo search failed for query='{}': {}", query, e)
 
-        # 4. Fallback generator only if explicitly enabled
+        # 6. Progressive distillation fallback: if query was too specific, search core terms
+        stop_words = {"the", "and", "with", "from", "that", "this", "some", "into", "closeup", "detail"}
+        words = [w for w in query.strip().split() if len(w) > 2 and w.lower() not in stop_words]
+        if len(candidates) < 2 and len(words) >= 3:
+            distilled_queries = [
+                " ".join(words[:2]),
+                words[0],
+            ]
+            for simp_q in distilled_queries:
+                if len(candidates) >= 3:
+                    break
+                try:
+                    if pixabay_keys and not is_photo_intent:
+                        raw_pixabay = material.search_videos_pixabay(
+                            search_term=simp_q,
+                            minimum_duration=max(3, int(target_duration)),
+                            video_aspect=VideoAspect.portrait,
+                        )
+                        for item in raw_pixabay:
+                            s_info = item.source_info if isinstance(item.source_info, dict) else {}
+                            creator = s_info.get("creator") or {}
+                            orig_id = str(s_info.get("asset_id") or "")
+                            candidates.append(
+                                MediaCandidate(
+                                    provider="pixabay",
+                                    provider_asset_id=orig_id,
+                                    asset_id=f"pixabay_vid_{orig_id}" if orig_id else hashlib.md5(item.url.encode()).hexdigest()[:12],
+                                    query=simp_q,
+                                    width=1080,
+                                    height=1920,
+                                    duration=float(item.duration),
+                                    url=item.url,
+                                    media_type="video",
+                                    creator_name=creator.get("name", "") if isinstance(creator, dict) else "",
+                                    creator_url=creator.get("url", "") if isinstance(creator, dict) else "",
+                                    license_id="Pixabay License",
+                                    license_url="https://pixabay.com/service/license-summary/",
+                                )
+                            )
+                    if len(candidates) < 3:
+                        simp_photos = self.sources_manager.search_photos(
+                            query=simp_q,
+                            aspect="portrait",
+                            limit_per_provider=3,
+                        )
+                        candidates.extend(simp_photos)
+                except Exception as e:
+                    logger.debug("Distilled query search failed for '{}': {}", simp_q, e)
+
+        # 7. Fallback generator only if explicitly enabled
         if not candidates and enable_synthetic_fallback:
             slug = hashlib.md5(f"{query}_{visual_type}".encode()).hexdigest()[:10]
             is_meme_intent = (

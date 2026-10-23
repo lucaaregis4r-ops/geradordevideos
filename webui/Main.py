@@ -1717,54 +1717,29 @@ def _open_material_settings_dialog():
 
 
 def _render_brand(available_update: str | None = None):
-    """渲染项目名称、当前版本和可选的更新入口。"""
-    update_link = ""
-    if available_update:
-        update_label = html.escape(
-            tr("Update Available").format(version=available_update)
-        )
-        # Streamlit 会继续用 Markdown 解析传入的 HTML。这里保持链接为单行，
-        # 避免多行字符串的缩进被识别成代码块，导致页面直接显示 HTML 源码。
-        update_link = (
-            '<a class="mpt-brand__update" '
-            f'href="{version_checker.LATEST_RELEASE_PAGE_URL}" '
-            'target="_blank" rel="noopener noreferrer" '
-            f'aria-label="{update_label}" title="{update_label}">'
-            f"{update_label}</a>"
-        )
+    """Renderiza a marca limpa da Fábrica de Bermudas."""
     st.markdown(
         f"""
-        <h1 class="mpt-brand">
-            <span class="mpt-brand__name">🎬 Fábrica de Bermudas</span>
-            <span style="font-size: 0.45em; opacity: 0.8; font-weight: normal; margin-left: 6px; vertical-align: middle;">(Motor Editorial 9:16)</span>
-            <a class="mpt-brand__version"
+        <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px;">
+            <span style="font-size: 1.7rem; font-weight: 800; letter-spacing: -0.5px; background: linear-gradient(135deg, #FF4B4B, #FF8533); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+                🎬 FÁBRICA DE BERMUDAS
+            </span>
+            <span style="font-size: 0.85rem; color: #aaa; background: rgba(255,255,255,0.06); padding: 3px 8px; border-radius: 4px; font-weight: 500;">
+                Estúdio Editorial 9:16
+            </span>
+            <a style="font-size: 0.82rem; color: #4facfe; text-decoration: none;"
                href="https://github.com/lucaaregis4r-ops/geradordevideos"
-               target="_blank"
-               rel="noopener noreferrer"
-               aria-label="Abrir no GitHub"
-               title="Abrir no GitHub">v{html.escape(str(config.project_version))}</a>
-            {update_link}
-        </h1>
+               target="_blank" rel="noopener noreferrer">
+               GitHub ↗
+            </a>
+        </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-@st.fragment(run_every="1s")
-def _render_pending_version_check():
-    """检查未完成时只刷新品牌区域，避免阻塞或反复执行整页表单。"""
-    snapshot = version_checker.poll_available_update(config.project_version)
-    if snapshot.complete:
-        # 检查完成后刷新一次整页，让顶部栏改为静态渲染并停止 fragment 轮询。
-        # 该刷新发生在后台请求完成之后，不会延迟初始页面的其它内容。
-        st.rerun(scope="app")
-    _render_brand()
-
-
 def _render_top_bar():
-    """渲染品牌、任务管理、设置和语言切换组成的页面顶部栏。"""
-    # 顶部栏分为品牌区和操作区两个独立区域。窄屏下由 Streamlit
-    # 将两个区域整体换行，操作区内部再根据剩余宽度自动换行。
+    """Renderiza a barra superior limpa da Fábrica de Bermudas."""
     with st.container(key="top_bar"):
         brand_col, actions_col = st.columns(
             [3.5, 2.0],
@@ -1773,11 +1748,7 @@ def _render_top_bar():
         )
 
     with brand_col:
-        update_snapshot = version_checker.poll_available_update(config.project_version)
-        if update_snapshot.complete:
-            _render_brand(update_snapshot.available_version)
-        else:
-            _render_pending_version_check()
+        _render_brand()
 
     with actions_col:
         with st.container(
@@ -8455,6 +8426,14 @@ def _render_fabrica_de_bermudas_tab():
         help="O texto falado não será alterado. Cada frase se torna uma cena com busca concreta de imagens.",
     )
 
+    col_opt1, col_opt2 = st.columns([1.6, 1.0])
+    with col_opt1:
+        allow_preview = st.checkbox(
+            "🎬 Renderizar vídeo mesmo se houver avisos no Quality Gate (Modo Rascunho / Preview)",
+            value=True,
+            help="Garante que o vídeo seja renderizado com cortes e efeitos mesmo que haja pequenos avisos editoriais, permitindo assistir ao resultado de imediato.",
+        )
+
     col_btn, col_review_link = st.columns([2, 1])
     with col_btn:
         start_btn = st.button("🚀 Produzir Vídeo na Fábrica de Bermudas", type="primary", use_container_width=True)
@@ -8491,6 +8470,7 @@ def _render_fabrica_de_bermudas_tab():
                         title=title_val.strip() or "Ensaio Audiovisual",
                         brand_style=chosen_style,
                         voice_name=chosen_voice,
+                        allow_unpassed_draft=allow_preview,
                         on_progress=progress_callback,
                     )
                 st.session_state["latest_bermudas_draft"] = draft
@@ -8510,13 +8490,28 @@ def _render_fabrica_de_bermudas_tab():
             video_path = draft.get("video_path")
             if video_path and Path(video_path).exists():
                 st.video(str(video_path))
+                st.caption(f"📁 Vídeo gerado: `{video_path}`")
             else:
-                st.info("Vídeo pré-visualizado no Storyboard HTML.")
+                if draft.get("error"):
+                    st.warning(f"⚠️ {draft.get('error')}")
+                st.info("O roteiro e storyboard foram gerados. Deseja renderizar o vídeo agora?")
+                if st.button("▶️ Renderizar Vídeo Agora (Modo Preview)", type="primary", key="btn_force_render"):
+                    with st.spinner("Renderizando vídeo com FFmpeg a partir do plano existente..."):
+                        try:
+                            from app.services.factory import ShortsFactory
+                            fac = ShortsFactory(base_dir="storage")
+                            res = fac.render_existing_draft(draft["script_id"])
+                            draft["video_path"] = res.get("video_path")
+                            st.session_state["latest_bermudas_draft"] = draft
+                            st.success("Vídeo renderizado com sucesso!")
+                            st.rerun()
+                        except Exception as ex:
+                            st.error(f"Erro ao renderizar: {ex}")
 
         with col_info:
             score = draft.get("quality_score", {})
             st.markdown(f"**Projeto:** `{draft.get('script_id')}`")
-            st.markdown(f"**Quality Gate:** {'✅ **APROVADO**' if score.get('passed') else '❌ **REPROVADO**'}")
+            st.markdown(f"**Quality Gate:** {'✅ **APROVADO**' if score.get('passed') else '⚠️ **AVISOS EDITORIAIS**'}")
 
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -8560,8 +8555,8 @@ def _render_application():
         st.success(tr("Task Configuration Loaded"))
 
     tab_bermudas, tab_classic = st.tabs([
-        "🎬 Fábrica de Bermudas (Motor Editorial 9:16)",
-        "⚙️ Modo Clássico (MoneyPrinterTurbo)",
+        "🎬 Estúdio Fábrica de Bermudas (Editorial 9:16)",
+        "⚙️ Configurações Avançadas e Motores Legados",
     ])
 
     with tab_bermudas:

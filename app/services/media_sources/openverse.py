@@ -52,7 +52,7 @@ class OpenverseProvider(MediaSourceProvider):
                 url,
                 headers=headers,
                 proxies=config.proxy,
-                timeout=(10, 30),
+                timeout=(3, 6),
             )
             if resp.status_code != 200:
                 logger.warning(

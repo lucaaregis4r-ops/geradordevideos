@@ -59,6 +59,21 @@ class LocalRuleDirectorProvider(DirectorProvider):
         if not raw_sentences:
             raw_sentences = [clean_text]
 
+        # Group very short consecutive sentences into coherent editorial units (3.0s to 5.5s)
+        merged_sentences = []
+        curr_chunk = ""
+        for s in raw_sentences:
+            if not curr_chunk:
+                curr_chunk = s
+            elif estimate_duration_seconds(curr_chunk) + estimate_duration_seconds(s) <= 5.5:
+                curr_chunk += " " + s
+            else:
+                merged_sentences.append(curr_chunk)
+                curr_chunk = s
+        if curr_chunk:
+            merged_sentences.append(curr_chunk)
+        raw_sentences = merged_sentences
+
         scenes: list[Scene] = []
         accumulated_time = 0.0
         total_count = len(raw_sentences)
@@ -248,7 +263,7 @@ class GeminiDirectorProvider(DirectorProvider):
 
         # Request JSON generation with automatic model fallback on temporary 503 high demand
         candidate_models = [self.model_name] + [
-            m for m in ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.5-flash"]
+            m for m in ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-lite-latest", "gemini-3.8-flash"]
             if m != self.model_name
         ]
 

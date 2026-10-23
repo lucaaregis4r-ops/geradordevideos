@@ -98,14 +98,15 @@ class QualityChecker:
         return round(sum(scores) / len(scores), 3)
 
     def _check_consecutive_treatments(self, plan: AssemblyPlan) -> int:
-        """Counts instances where more than max_consecutive segments share the same visual treatment.
+        """Counts instances where more than max_consecutive segments share the same non-video treatment.
 
-        Deliberate callbacks are exempted from being penalized as involuntary monotony.
+        Deliberate callbacks and dynamic stock video clips are exempted from being penalized as monotony.
         """
         max_consecutive = self.thresholds.get("max_consecutive_same_treatment", 3)
         if not plan.segments or len(plan.segments) <= max_consecutive:
             return 0
 
+        monotonous_types = {"synthetic", "fallback", "component", "data_card", "split_screen", "price_tag", "quote"}
         violations = 0
         current_type = plan.segments[0].asset_type
         run_len = 1
@@ -114,7 +115,7 @@ class QualityChecker:
                 current_type = s.asset_type
                 run_len = 1
                 continue
-            if s.asset_type == current_type:
+            if s.asset_type == current_type and current_type in monotonous_types:
                 run_len += 1
                 if run_len > max_consecutive:
                     violations += 1

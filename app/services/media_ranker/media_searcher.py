@@ -5,13 +5,18 @@ ScenePlan -> Queries -> CandidateBuilder -> Deduplicator -> Technical Filter -> 
 """
 
 from __future__ import annotations
+import hashlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
+from PIL import Image
+import requests
+from loguru import logger
+
+from app.config import config
 from app.services import material
 from app.services.director.schemas import Scene, ScenePlan
-from loguru import logger
 from .candidate_builder import CandidateBuilder
 from .deduplicator import MediaDeduplicator
 from .schemas import MediaCandidate
@@ -134,15 +139,89 @@ class MediaSearcher:
 
         return sem_ranked
 
+    def _download_candidate_asset(self, candidate: MediaCandidate) -> str:
+        """Downloads candidate asset to local media cache, supporting both videos and images."""
+        if not candidate.url:
+            return ""
+
+        clean_url = candidate.url.split("?")[0].lower()
+        is_image = (
+            candidate.media_type == "image"
+            or any(clean_url.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"))
+            or candidate.provider in ("openverse", "wikimedia_commons", "pexels_photos")
+        )
+
+        if is_image:
+            return self._download_image_asset(candidate)
+        else:
+            return material.save_video(
+                video_url=candidate.url,
+                save_dir=str(self.media_cache_dir),
+            )
+
+    def _download_image_asset(self, candidate: MediaCandidate) -> str:
+        """Downloads and validates a static image asset with compliant headers."""
+        url = candidate.url
+        url_hash = hashlib.md5(url.split("#", 1)[0].encode("utf-8")).hexdigest()
+        clean_url = url.split("?")[0].lower()
+        ext = ".jpg"
+        for potential_ext in (".png", ".webp", ".jpeg", ".jpg"):
+            if clean_url.endswith(potential_ext):
+                ext = ".jpg" if potential_ext == ".jpeg" else potential_ext
+                break
+
+        img_path = self.media_cache_dir / f"img-{url_hash}{ext}"
+        if img_path.exists() and img_path.stat().st_size > 1024:
+            return str(img_path)
+
+        headers = {
+            "User-Agent": "FabricaDeShortsBot/2.0 (https://github.com/lucasregis/fabrica; contact@fabricadeshorts.com)",
+            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+        }
+
+        temp_path = self.media_cache_dir / f".tmp_{url_hash}{ext}"
+        try:
+            resp = requests.get(
+                url,
+                headers=headers,
+                proxies=config.proxy,
+                timeout=(10, 25),
+                stream=True,
+            )
+            resp.raise_for_status()
+
+            with open(temp_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=65536):
+                    if chunk:
+                        f.write(chunk)
+
+            # Validate and normalize with PIL
+            with Image.open(temp_path) as img:
+                img.verify()
+
+            temp_path.replace(img_path)
+            return str(img_path)
+        except Exception as e:
+            logger.warning("Failed to download image candidate {} ({}): {}", candidate.asset_id, url, e)
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+            return ""
+
     def populate_scene_plan(
         self,
         plan: ScenePlan,
         candidates_per_scene: int = 5,
         download_selected: bool = True,
         save_plan_path: Optional[str | Path] = None,
+        on_progress: Optional[Callable[[str, float], None]] = None,
     ) -> ScenePlan:
         """Enriches all scenes in the plan with media_candidates and a selected_media default."""
-        for scene in plan.scenes:
+        total_scenes = len(plan.scenes)
+        for idx, scene in enumerate(plan.scenes):
+            if on_progress:
+                scene_frac = idx / max(1, total_scenes)
+                on_progress(f"Buscando mídias: cena {idx+1}/{total_scenes} ({scene.scene_id})...", scene_frac)
+
             # Estimate scene duration if start/end exist, else default to 4.0s
             duration = (scene.end - scene.start) if (scene.start is not None and scene.end is not None) else 4.0
             candidates = self.search_for_scene(
@@ -155,9 +234,8 @@ class MediaSearcher:
             scene.media_candidates = [c.to_dict() for c in candidates]
 
             selected_cand: Optional[MediaCandidate] = None
+            visual_cat = scene.entities[0] if getattr(scene, "entities", None) else getattr(scene, "narrative_function", "")
             if candidates:
-                visual_cat = scene.entities[0] if getattr(scene, "entities", None) else getattr(scene, "narrative_function", "")
-
                 for candidate in candidates:
                     local_p: Optional[str] = None
 
@@ -167,10 +245,7 @@ class MediaSearcher:
                     elif download_selected and candidate.url:
                         try:
                             logger.info("Downloading candidate {} from {} for scene {}", candidate.asset_id, candidate.url, scene.scene_id)
-                            downloaded = material.save_video(
-                                video_url=candidate.url,
-                                save_dir=str(self.media_cache_dir),
-                            )
+                            downloaded = self._download_candidate_asset(candidate)
                             if downloaded and Path(downloaded).exists():
                                 candidate.local_path = downloaded
                                 local_p = downloaded
@@ -246,12 +321,42 @@ class MediaSearcher:
                         visual_category=visual_cat,
                     )
                     scene.selected_media = selected_cand.to_dict()
-                else:
-                    logger.error("All media candidates failed to download or are unavailable for scene {}", scene.scene_id)
-                    scene.selected_media = {}
-            else:
-                logger.warning("No media candidates found for scene {}", scene.scene_id)
-                scene.selected_media = {}
+
+            # Fallback if no candidate was found or all downloads failed
+            if not selected_cand:
+                logger.warning(
+                    "All media candidates failed to download or unavailable for scene {}. Generating fallback visual...",
+                    scene.scene_id,
+                )
+                from .candidate_builder import _generate_synthetic_photo_clip
+                fallback_slug = hashlib.md5(f"{scene.scene_id}_{scene.narration}".encode()).hexdigest()[:8]
+                fallback_path = self.media_cache_dir / f"fallback_{scene.scene_id}_{fallback_slug}.mp4"
+                motion = getattr(scene, "preferred_motion", "zoom_in") or "zoom_in"
+                _generate_synthetic_photo_clip(
+                    query=scene.intent or scene.narration or "Cena",
+                    output_path=fallback_path,
+                    duration=max(3.0, duration),
+                    motion=motion,
+                )
+                selected_cand = MediaCandidate(
+                    provider="fallback",
+                    asset_id=f"fallback_{scene.scene_id}",
+                    query=scene.queries[0] if scene.queries else (scene.intent or "Cena"),
+                    width=1080,
+                    height=1920,
+                    duration=max(3.0, duration),
+                    url=str(fallback_path),
+                    local_path=str(fallback_path),
+                    technical_score=0.75,
+                    final_score=0.75,
+                    is_synthetic=False,
+                )
+                self.deduplicator.mark_used(
+                    selected_cand,
+                    scene_id=scene.scene_id,
+                    visual_category=visual_cat,
+                )
+                scene.selected_media = selected_cand.to_dict()
 
             # If scene has multiple visual beats, assign selected_media to each beat
             if getattr(scene, "has_multiple_beats", False) and scene.visual_beats:

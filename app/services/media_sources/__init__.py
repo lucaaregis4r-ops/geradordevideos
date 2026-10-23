@@ -4,12 +4,14 @@ from .base import MediaSourceProvider
 from .manager import MediaSourcesManager
 from .openverse import OpenverseProvider
 from .pexels_photos import PexelsPhotoProvider
+from .pixabay_photos import PixabayPhotoProvider
 from .wikimedia_commons import WikimediaCommonsProvider
 
 __all__ = [
     "MediaSourceProvider",
     "MediaSourcesManager",
     "PexelsPhotoProvider",
+    "PixabayPhotoProvider",
     "WikimediaCommonsProvider",
     "OpenverseProvider",
 ]
