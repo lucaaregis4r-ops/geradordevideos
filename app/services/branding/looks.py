@@ -39,7 +39,7 @@ class VisualLook(BaseModel):
             }[self.preset]
             parts.extend([
                 f'eq=contrast={1+contrast*i:.5f}:saturation={1+saturation*i:.5f}',
-                f'colorbalance=rm={warmth*i:.5f}:bm={-warmth*i:.5f}:pl=1',
+                f'colorbalance=rm={warmth*i:.5f}:bm={-warmth*i:.5f}:pl=0',
             ])
         if self.grain > 0:
             parts.append(f'noise=alls={self.grain*8:.3f}:allf=t+u:all_seed=42')
@@ -59,7 +59,7 @@ def render_look(source: str | Path, look: VisualLook, cache_dir: Path, *,
     if not look.filters() and not preview:
         return source
     stamp = source.stat()
-    key = hashlib.sha256(json.dumps(['look-v2', str(source), stamp.st_size, stamp.st_mtime_ns,
+    key = hashlib.sha256(json.dumps(['look-v3', str(source), stamp.st_size, stamp.st_mtime_ns,
         look.model_dump(), source_in, duration, preview], sort_keys=True).encode()).hexdigest()
     cache_dir.mkdir(parents=True, exist_ok=True)
     output = cache_dir / f'{key}.mp4'

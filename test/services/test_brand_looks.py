@@ -73,3 +73,12 @@ def test_preview_keeps_same_interval_and_is_bounded(clip,tmp_path):
     probe=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_streams','-show_format','-of','json',str(result)]))
     assert abs(float(probe['format']['duration'])-2)<0.1
     assert probe['streams'][0]['width']<=540 and probe['streams'][0]['height']<=960
+
+
+def test_gentle_warm_look_does_not_turn_saturated_blue_gray(tmp_path):
+    source=tmp_path/'blue.mp4'
+    subprocess.run(['ffmpeg','-y','-v','error','-f','lavfi','-i','color=c=blue:s=64x64:d=1',
+                    '-c:v','libx264',str(source)], check=True)
+    result=render_look(source,VisualLook(preset='warm',intensity=.75),tmp_path/'cache',duration=1)
+    red,green,blue=frame(result)[:3]
+    assert blue > red+150 and blue > green+150

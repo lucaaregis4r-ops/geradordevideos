@@ -31,4 +31,6 @@ A aplicação uniforme de um tratamento cria recorrência visual, mas não igual
 
 ## Validação
 
-24 testes distintos passaram entre `test_brand_looks.py` (9) e `test_sprint_identity.py` (15): execução real de todos os estilos em FFmpeg, duração e dimensões, bypass com intensidade zero, cache, rejeição de trechos truncados, isolamento entre canais e preservação da cópia por projeto. Streamlit AppTest verificou carregamento do editor e troca de dois presets com estilos diferentes. Ruff E9/F821, compilação e diff também passaram. Prévia em 540×960 no máximo; ela serve para avaliar o estilo, não para inspecionar detalhes da exportação final.
+25 testes distintos passaram entre `test_brand_looks.py` (10) e `test_sprint_identity.py` (15): execução real de todos os estilos em FFmpeg, duração e dimensões, bypass com intensidade zero, cache, rejeição de trechos truncados, isolamento entre canais e preservação da cópia por projeto. Streamlit AppTest verificou carregamento do editor e troca de dois presets com estilos diferentes. Ruff E9/F821, compilação e diff também passaram. Prévia em 540×960 no máximo; ela serve para avaliar o estilo, não para inspecionar detalhes da exportação final.
+
+A comparação de estilos também foi inspecionada em um clipe real da produção. Um teste adicional protege contra a dessaturação indevida de azul intenso.
