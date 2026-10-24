@@ -47,31 +47,9 @@ class EdgeVoiceProvider(VoiceProvider):
     """Microsoft Edge TTS provider (Free, High quality, No API key needed)."""
 
     def list_voices(self, locale_prefix: str = "pt-BR") -> List[Dict[str, Any]]:
-        # Hardcoded primary high-quality PT-BR neural voices
-        known = [
-            {
-                "id": "pt-BR-AntonioNeural-Male",
-                "name": "Antônio (Masculino - Natural)",
-                "gender": "Male",
-                "locale": "pt-BR",
-                "provider": "edge",
-            },
-            {
-                "id": "pt-BR-FranciscaNeural-Female",
-                "name": "Francisca (Feminino - Natural)",
-                "gender": "Female",
-                "locale": "pt-BR",
-                "provider": "edge",
-            },
-            {
-                "id": "pt-BR-ThalitaMultilingualNeural-Female",
-                "name": "Thalita (Feminino - Multilingual)",
-                "gender": "Female",
-                "locale": "pt-BR",
-                "provider": "edge",
-            },
-        ]
-        return known
+        from .catalog import PORTUGUESE_VOICES
+        return [{**v, "provider": "edge", "gender": v["id"].rsplit("-", 1)[-1]}
+                for v in PORTUGUESE_VOICES if v["locale"].startswith(locale_prefix)]
 
     def synthesize(
         self,
@@ -89,6 +67,8 @@ class EdgeVoiceProvider(VoiceProvider):
             out_file = Path(output_path).resolve()
             out_file.parent.mkdir(parents=True, exist_ok=True)
 
+        from .catalog import validate_voice_configuration
+        validate_voice_configuration(voice_name)
         # Call the existing battle-tested voice.tts from legacy service
         sub = legacy_voice.tts(
             text=text,
@@ -97,6 +77,9 @@ class EdgeVoiceProvider(VoiceProvider):
             voice_file=str(out_file),
             voice_volume=float(volume),
         )
+
+        if not out_file.is_file() or out_file.stat().st_size == 0:
+            raise RuntimeError("O provedor não gerou áudio. Verifique chave, cota e disponibilidade da voz.")
 
         # Probe duration with ffprobe
         duration = 0.0
@@ -116,7 +99,7 @@ class EdgeVoiceProvider(VoiceProvider):
             "audio_path": str(out_file),
             "duration": round(duration, 2),
             "subtitles": str(sub) if sub else None,
-            "provider": "edge",
+            "provider": "gemini" if voice_name.startswith("gemini:") else "edge",
             "voice_name": voice_name,
         }
 

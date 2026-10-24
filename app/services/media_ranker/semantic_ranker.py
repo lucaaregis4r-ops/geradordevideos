@@ -42,6 +42,17 @@ BILINGUAL_LEXICON: Dict[str, set[str]] = {
     "industry": {"indústria", "fábrica"},
     "farm": {"campo", "fazenda", "agricultura"},
     "harvest": {"colheita", "safra"},
+    # Concrete grocery objects/actions; metadata remains unverified until review.
+    "coffee": {"café"},
+    "bag": {"pacote", "saco", "embalagem"},
+    "package": {"pacote", "embalagem"},
+    "shelf": {"prateleira", "gôndola"},
+    "stocking": {"repondo", "reposição", "abastecendo"},
+    "cashier": {"caixa", "operador"},
+    "barcode": {"código", "barras"},
+    "scanner": {"leitor", "scanner"},
+    "scanning": {"escaneando", "leitura"},
+    "beans": {"grãos"},
     # Science / Space
     "space": {"espaço", "espacial", "cosmos"},
     "rocket": {"foguete", "nave"},

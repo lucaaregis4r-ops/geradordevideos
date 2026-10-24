@@ -6,7 +6,6 @@ ScenePlan -> Queries -> CandidateBuilder -> Deduplicator -> Technical Filter -> 
 
 from __future__ import annotations
 from dataclasses import replace, asdict
-from time import monotonic
 import hashlib
 import json
 import re
@@ -73,6 +72,7 @@ class MediaSearcher:
         """Resets deduplicator and internal tracking state between production runs."""
         self.deduplicator.reset()
         self.search_attempts.clear()
+        self._beat_context.clear()
 
     def search_for_scene(
         self,
@@ -94,10 +94,9 @@ class MediaSearcher:
             all_raw_candidates.extend(lib_matches)
 
         # 1. Run each query through candidate builder (external stock + local cache)
-        deadline = monotonic() + 45
-        for q in scene.queries:
-            if monotonic() >= deadline:
-                break
+        # Each explicit alternative gets a chance; one slow provider must not
+        # consume the entire scene budget before queries 2 and 3 are attempted.
+        for q in list(dict.fromkeys(scene.queries))[:5]:
             raw = self.candidate_builder.search_query(
                 query=q,
                 target_duration=target_duration,

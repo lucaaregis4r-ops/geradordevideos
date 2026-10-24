@@ -94,6 +94,7 @@ class ShortsFactory:
         bgm_volume: float = 0.20,
         enforce_quality_gate: bool = True,
         allow_unpassed_draft: bool = False,
+        brand_kit: Optional[dict] = None,
         on_progress: Optional[Callable[[str, float], None]] = None,
     ) -> dict[str, Any]:
         """Executes the complete pipeline:
@@ -107,6 +108,18 @@ class ShortsFactory:
         chosen_voice = voice_name or self.voice_name
         project_folder = self.projects_dir / script_id
         project_folder.mkdir(parents=True, exist_ok=True)
+
+        from app.services.branding.kit import BrandKit, save_kit
+        kit = BrandKit.model_validate(brand_kit) if brand_kit else None
+        if kit:
+            chosen_voice = kit.voice
+            bgm_path, bgm_volume = kit.music_path or None, kit.music_volume
+            if bgm_path and not Path(bgm_path).is_file():
+                raise ValueError("A trilha do kit não está disponível. Escolha outra no editor de identidade.")
+            save_kit(kit, project_folder / "brand_kit.json")
+        self.typography_engine = TypographyEngine(accent=kit.accent if kit else None)
+        from app.services.voice_studio.catalog import validate_voice_configuration
+        validate_voice_configuration(chosen_voice)
 
         # Reset media searcher deduplication state for this production run
         self.searcher.reset()
@@ -139,7 +152,7 @@ class ShortsFactory:
             voice.tts(
                 text=spoken_text,
                 voice_name=chosen_voice,
-                voice_rate=1.0,
+                voice_rate=kit.voice_rate if kit else 1.0,
                 voice_file=str(audio_path),
             )
             # Master the voice track to EBU R128 (-14.0 LUFS) with high-pass and compressor
@@ -204,8 +217,11 @@ class ShortsFactory:
             project_title=title or getattr(plan, "title", ""),
         )
 
-        # Enforce Quality Gate: block rendering if rejected unless explicitly allowed as preview
-        if enforce_quality_gate and not allow_unpassed_draft and not quality_score.passed:
+        from app.services.assembly.readiness import can_render, readiness_report
+        readiness = readiness_report(assembly_plan, plan)
+        (project_folder / "readiness.json").write_text(json.dumps(readiness, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Structural failures cannot be bypassed by preview or legacy flags.
+        if not can_render(quality_score, allow_preview=allow_unpassed_draft):
             alert_summary = ", ".join(quality_score.alerts) if quality_score.alerts else "unspecified quality violations"
             logger.warning(
                 "Quality Gate REJECTED draft for script '{}': {}",
@@ -214,6 +230,7 @@ class ShortsFactory:
             return {
                 "script_id": script_id,
                 "revision_id": None,
+                "readiness": readiness,
                 "status": "rejected_by_quality_gate",
                 "plan_path": str(project_folder / "scenes.json"),
                 "assembly_plan_path": str(assembly_plan_path),
@@ -253,7 +270,7 @@ class ShortsFactory:
             source = Path(footage_path) if footage_path else None
             source_stamp = (source.stat().st_size, source.stat().st_mtime_ns) if source and source.is_file() else None
             identity = json.dumps(["framing-v4-repeated-overlay", footage_path, source_stamp, seg_duration, segment.source_in, segment.source_out,
-                                   segment.crop_mode, segment.overlay_text, segment.text_level,
+                                   segment.crop_mode, segment.overlay_text, segment.text_level, self.typography_engine.accent,
                                    getattr(scene, "preferred_motion", "")], sort_keys=True)
             cache_key = scene_key + "_" + hashlib.sha256(identity.encode()).hexdigest()[:16]
 
@@ -286,16 +303,7 @@ class ShortsFactory:
                         logger.warning("Failed to render component {}: {}", segment.asset_type, e)
 
             if not footage_path or not Path(footage_path).exists():
-                if self.allow_placeholders or allow_unpassed_draft:
-                    # Fallback to synthetic clip if permitted for test/preview
-                    fallback_clip = self.media_cache_dir / f"fallback_{scene_key}.mp4"
-                    from .media_ranker.candidate_builder import _generate_synthetic_clip
-                    query = "MIDIA PENDENTE"
-                    _generate_synthetic_clip(query, fallback_clip)
-                    footage_path = str(fallback_clip)
-                    logger.warning("Segment '{}' using synthetic placeholder fallback: {}", scene_key, fallback_clip)
-                else:
-                    raise ValueError(f"pending_media:{scene_key}")
+                raise ValueError(f"Mídia pendente: {scene_key}. Abra o Review Studio para selecionar uma mídia.")
 
             # If asset is a static image, convert to vertical Ken Burns video clip
             if footage_path and Path(footage_path).exists() and is_image_file(footage_path):
@@ -376,40 +384,8 @@ class ShortsFactory:
         export_info = render_status.get("export", {})
         final_video_path = export_info.get("path")
 
-        # 7. Optional Adaptive BGM Automation & Remuxing
-        if bgm_path and Path(bgm_path).exists() and final_video_path and Path(final_video_path).exists():
-            if on_progress:
-                on_progress("Applying adaptive BGM automation with sidechain ducking...", 0.95)
-            try:
-                import subprocess
-                extracted_voice = project_folder / "audio" / "extracted_voice.wav"
-                cmd_extract = [
-                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                    "-i", str(final_video_path),
-                    "-vn", "-ac", "2", "-ar", "48000",
-                    str(extracted_voice),
-                ]
-                subprocess.run(cmd_extract, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-                mixed_audio = project_folder / "audio" / "adaptive_bgm_mix.wav"
-                phase_segments = [s.to_dict() for s in assembly_plan.segments]
-                mix_voice_with_adaptive_bgm(
-                    voice_path=extracted_voice,
-                    bgm_path=bgm_path,
-                    output_path=mixed_audio,
-                    phase_segments=phase_segments,
-                    base_volume=bgm_volume,
-                )
-
-                remuxed_video = project_folder / f"{script_id}_mastered.mp4"
-                remux_video_with_audio(
-                    video_path=final_video_path,
-                    audio_path=mixed_audio,
-                    output_path=remuxed_video,
-                )
-                final_video_path = str(remuxed_video)
-            except Exception as e:
-                logger.warning("Adaptive BGM automation failed for script '{}': {}", script_id, e)
+        final_video_path = self._apply_music(project_folder, script_id, final_video_path,
+                                             assembly_plan, bgm_path, bgm_volume)
 
         export_audit = self._audit_export(project_folder, final_video_path, assembly_plan, quality_score,
                                           bypass=not enforce_quality_gate or allow_unpassed_draft)
@@ -419,6 +395,7 @@ class ShortsFactory:
         return {
             "script_id": script_id,
             "revision_id": rev_id,
+            "readiness": readiness,
             "publishable": export_audit["publishable"],
             "status": final_status,
             "plan_path": str(project_folder / "scenes.json"),
@@ -432,6 +409,41 @@ class ShortsFactory:
             "total_scenes": plan.total_scenes,
             "estimated_duration": plan.estimated_duration,
         }
+
+    @staticmethod
+    def _apply_music(project_folder, script_id, final_video_path, assembly_plan, bgm_path, bgm_volume):
+        if not bgm_path:
+            return final_video_path
+        if not Path(bgm_path).is_file():
+            raise ValueError("Trilha musical indisponível; ajuste o kit de identidade.")
+        import subprocess
+        extracted_voice = project_folder / "audio" / "extracted_voice.wav"
+        cmd_extract = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(final_video_path),
+            "-vn", "-ac", "2", "-ar", "48000",
+            str(extracted_voice),
+        ]
+        subprocess.run(cmd_extract, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        mixed_audio = project_folder / "audio" / "adaptive_bgm_mix.wav"
+        phase_segments = [s.to_dict() for s in assembly_plan.segments]
+        mix_voice_with_adaptive_bgm(
+            voice_path=extracted_voice,
+            bgm_path=bgm_path,
+            output_path=mixed_audio,
+            phase_segments=phase_segments,
+            base_volume=bgm_volume,
+        )
+
+        remuxed_video = project_folder / f"{script_id}_mastered.mp4"
+        remux_video_with_audio(
+            video_path=final_video_path,
+            audio_path=mixed_audio,
+            output_path=remuxed_video,
+        )
+        final_video_path = str(remuxed_video)
+        return final_video_path
 
     @staticmethod
     def _audit_export(folder, video_path, assembly_plan, quality_score, bypass=False):
@@ -481,6 +493,12 @@ class ShortsFactory:
         with assembly_file.open("r", encoding="utf-8") as f:
             assembly_plan = AssemblyPlan.from_dict(json.load(f))
 
+        from app.services.branding.kit import load_kit
+        kit = load_kit(project_folder / "brand_kit.json") if (project_folder / "brand_kit.json").exists() else None
+        self.typography_engine = TypographyEngine(accent=kit.accent if kit else None)
+        if kit:
+            self.voice_name = kit.voice
+
         # Rebuild from the current review; a saved AssemblyPlan may be stale after a swap.
         audio_dir = project_folder / "audio"
         audio_dir.mkdir(exist_ok=True)
@@ -489,7 +507,7 @@ class ShortsFactory:
             if not audio or not Path(audio).is_file():
                 audio = str(audio_dir / f"{scene.scene_id}.mp3")
                 voice.tts(text=self.pronunciation_engine.to_spoken(scene.narration),
-                          voice_name=self.voice_name, voice_rate=1.0, voice_file=audio)
+                          voice_name=self.voice_name, voice_rate=kit.voice_rate if kit else 1.0, voice_file=audio)
                 mastered = audio_dir / f"{scene.scene_id}_mastered.wav"
                 master_voice_track(audio, mastered, target_lufs=-14.0)
                 audio = str(mastered)
@@ -499,8 +517,11 @@ class ShortsFactory:
         assembly_plan = self.assembly_planner.build_plan(plan)
         quality_score = self.quality_checker.evaluate(assembly_plan)
         assembly_file.write_text(assembly_plan.to_json(), encoding="utf-8")
+        from app.services.assembly.readiness import readiness_report
+        readiness = readiness_report(assembly_plan, plan)
+        (project_folder / "readiness.json").write_text(json.dumps(readiness, ensure_ascii=False, indent=2), encoding="utf-8")
         if not quality_score.passed:
-            return {"script_id": script_id, "status": "rejected_by_quality_gate",
+            return {"readiness": readiness, "script_id": script_id, "status": "rejected_by_quality_gate",
                     "video_path": None, "quality_score": quality_score.to_dict()}
 
         if on_progress:
@@ -530,7 +551,7 @@ class ShortsFactory:
             source = Path(footage_path) if footage_path else None
             source_stamp = (source.stat().st_size, source.stat().st_mtime_ns) if source and source.is_file() else None
             identity = json.dumps(["framing-v4-repeated-overlay", footage_path, source_stamp, seg_duration, segment.source_in, segment.source_out,
-                                   segment.crop_mode, segment.overlay_text, segment.text_level,
+                                   segment.crop_mode, segment.overlay_text, segment.text_level, self.typography_engine.accent,
                                    getattr(scene, "preferred_motion", "")], sort_keys=True)
             cache_key = scene_key + "_" + hashlib.sha256(identity.encode()).hexdigest()[:16]
 
@@ -612,10 +633,14 @@ class ShortsFactory:
         export_info = render_status.get("export", {})
         final_video_path = export_info.get("path")
 
+        if kit:
+            final_video_path = self._apply_music(project_folder, script_id, final_video_path,
+                                                assembly_plan, kit.music_path, kit.music_volume)
         export_audit = self._audit_export(project_folder, final_video_path, assembly_plan, quality_score)
         return {
             "script_id": script_id,
             "revision_id": rev_id,
+            "readiness": readiness,
             "publishable": export_audit["publishable"],
             "status": render_status["state"] if export_audit["passed"] else "preview_failed_export_validation",
             "quality_score": quality_score.to_dict(),

@@ -19,7 +19,8 @@ st.title("🎙️ Voice Studio — Fábrica de Shorts")
 st.caption("Ajuste vozes em português natural, teste qualquer frase instantaneamente sem renderizar vídeo e controle o dicionário fonético.")
 
 voice_service = VoiceStudioService()
-available_voices = voice_service.list_voices()
+from app.services.voice_studio.catalog import production_voices
+available_voices = production_voices()
 
 tab_audition, tab_dict = st.tabs(["🔊 Teste de Voz (Instant Preview)", "📖 Dicionário de Pronúncia"])
 
@@ -32,12 +33,13 @@ with tab_audition:
     with col_cfg1:
         provider_name = st.selectbox(
             "Provedor de Voz:",
-            ["Edge TTS (Gratuito - Microsoft Neural)"],
+            ["Edge TTS (Gratuito - Microsoft Neural)", "Gemini (API configurada)"],
             index=0,
         )
 
     with col_cfg2:
-        voice_labels = [f"{v['name']}" for v in available_voices]
+        available_voices = [v for v in available_voices if v['provider'] == ('gemini' if provider_name.startswith('Gemini') else 'edge')]
+        voice_labels = [v['name'] for v in available_voices]
         selected_label = st.selectbox(
             "Voz em Português:",
             voice_labels,
@@ -54,6 +56,7 @@ with tab_audition:
             value=1.00,
             step=0.05,
             format="%.2fx",
+            disabled=provider_name.startswith("Gemini"),
         )
 
     test_phrase = st.text_area(
@@ -70,12 +73,12 @@ with tab_audition:
         btn_preview = st.button("▶ Ouvir Frase Instantaneamente", type="primary", use_container_width=True)
 
     if btn_preview:
-        with st.spinner("Sintetizando áudio com Edge TTS..."):
+        with st.spinner("Sintetizando áudio com o provedor selecionado..."):
             try:
                 res = voice_service.preview_phrase(
                     text=test_phrase,
                     voice_name=selected_voice_id,
-                    rate=speed_rate,
+                    rate=1.0 if provider_name.startswith("Gemini") else speed_rate,
                     apply_pronunciation=apply_dict,
                 )
                 audio_path = res["audio_path"]

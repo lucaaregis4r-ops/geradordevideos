@@ -8418,12 +8418,8 @@ def _render_fabrica_de_bermudas_tab():
             key="fb_title",
         )
     with col_v:
-        voice_options = [
-            "pt-BR-AntonioNeural-Male",
-            "pt-BR-FranciscaNeural-Female",
-            "pt-BR-ThalitaNeural-Female",
-            "en-US-AndrewNeural-Male",
-        ]
+        from app.services.voice_studio.catalog import production_voices
+        voice_options = [v["id"] for v in production_voices()]
         chosen_voice = st.selectbox(
             "Voz da Narração (TTS):",
             options=voice_options,
@@ -8462,12 +8458,20 @@ def _render_fabrica_de_bermudas_tab():
         if is_factory_screenplay(script_text):
             st.caption("Formato Fábrica V1: os planos, buscas e textos serão lidos diretamente, preservando a narração.")
 
+    from app.services.branding.kit import load_kit
+    saved_kit = load_kit()
+    use_brand = st.checkbox("Aplicar identidade salva", value=False,
+                            help="Usa a voz, velocidade, cor de destaque e trilha salvas no editor de identidade.")
+    if use_brand:
+        st.caption(f"Identidade: {saved_kit.name} · Voz: {saved_kit.voice} · {saved_kit.voice_rate:.2f}x")
+    st.page_link("pages/4_🎨_Identidade.py", label="Editar identidade e ouvir vozes", icon="🎨")
+
     col_opt1, col_opt2 = st.columns([1.6, 1.0])
     with col_opt1:
         allow_preview = st.checkbox(
-            "🎬 Renderizar vídeo mesmo se houver avisos no Quality Gate (Modo Rascunho / Preview)",
-            value=True,
-            help="Garante que o vídeo seja renderizado com cortes e efeitos mesmo que haja pequenos avisos editoriais, permitindo assistir ao resultado de imediato.",
+            "Prévia com revisão editorial pendente",
+            value=False,
+            help="Permite prévia de relevância pendente. Cenas sem mídia, imagens provisórias e falhas técnicas sempre bloqueiam o vídeo.",
         )
 
     col_btn, col_review_link = st.columns([2, 1])
@@ -8507,10 +8511,12 @@ def _render_fabrica_de_bermudas_tab():
                         brand_style=chosen_style,
                         voice_name=chosen_voice,
                         allow_unpassed_draft=allow_preview,
+                        brand_kit=saved_kit.model_dump() if use_brand else None,
                         on_progress=progress_callback,
                     )
                 st.session_state["latest_bermudas_draft"] = draft
-                st.success("🎉 Produção concluída com sucesso!")
+                if draft.get("video_path"):
+                    st.success("Vídeo gerado; confira o resultado e os avisos abaixo.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro durante a produção: {e}")
@@ -8520,6 +8526,10 @@ def _render_fabrica_de_bermudas_tab():
     if draft:
         st.divider()
         st.markdown("### 📹 Resultado da Produção Recente")
+        pending = draft.get("readiness", {}).get("pending", [])
+        if pending:
+            st.error(f"{len(pending)} cenas precisam de mídia antes de renderizar.")
+            st.dataframe(pending, use_container_width=True)
         col_video, col_info = st.columns([1.2, 2.0])
 
         with col_video:
@@ -8530,16 +8540,17 @@ def _render_fabrica_de_bermudas_tab():
             else:
                 if draft.get("error"):
                     st.warning(f"⚠️ {draft.get('error')}")
-                st.info("O roteiro e storyboard foram gerados. Deseja renderizar o vídeo agora?")
-                if st.button("▶️ Renderizar Vídeo Agora (Modo Preview)", type="primary", key="btn_force_render"):
+                st.info("Roteiro e storyboard salvos. Resolva as pendências no Review Studio antes de renderizar.")
+                if st.button("▶️ Validar e renderizar revisão", type="primary", key="btn_force_render"):
                     with st.spinner("Renderizando vídeo com FFmpeg a partir do plano existente..."):
                         try:
                             from app.services.factory import ShortsFactory
                             fac = ShortsFactory(base_dir="storage")
                             res = fac.render_existing_draft(draft["script_id"])
-                            draft["video_path"] = res.get("video_path")
+                            draft.update(res)
                             st.session_state["latest_bermudas_draft"] = draft
-                            st.success("Vídeo renderizado com sucesso!")
+                            if res.get("video_path"):
+                                st.success("Vídeo renderizado com sucesso!")
                             st.rerun()
                         except Exception as ex:
                             st.error(f"Erro ao renderizar: {ex}")
@@ -8551,7 +8562,7 @@ def _render_fabrica_de_bermudas_tab():
 
             c1, c2, c3 = st.columns(3)
             with c1:
-                st.metric("Score Semântico", f"{score.get('semantic_match_score', 0):.2f}/1.0")
+                st.metric("Score Semântico", f"{score.get('semantic_match_avg', 0):.2f}/1.0")
             with c2:
                 st.metric("Safe Area", f"{score.get('text_safe_area_errors', 0)} erros")
             with c3:
