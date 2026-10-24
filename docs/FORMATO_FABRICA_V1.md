@@ -16,3 +16,7 @@ A leitura direta conserva os planos, buscas e textos aprovados. Não usa uma cha
 As durações iniciais são estimativas; o áudio medido continua determinando a montagem. A proporção de filmagem, a pertinência dos assets, os direitos de uso e a aprovação do Quality Gate continuam dependendo dos arquivos selecionados e da revisão. Não há novas chaves, modelos ou serviços pagos configurados por este formato.
 
 Verificação: 27 testes direcionados passaram; uma regressão nativa de render foi excluída por esta alteração tratar do roteiro e da recuperação, sem alterar o renderizador. Os casos cobrem o exemplo completo sem chamada ao diretor de IA, fidelidade literal, campos inválidos, tipo de mídia, exclusões por metadados e compatibilidade do extrator. Ruff F821/E9 e checagem do diff passaram.
+
+## Atualização de uma instância já aberta
+
+Após atualizar módulos do programa, reinicie o processo Streamlit. Reexecutar apenas a página pode conservar referências antigas de módulos Python já importados. Isso foi observado numa instância iniciada antes da atualização: a interface reconhecia o cabeçalho V1, mas a versão antiga do extrator ainda incluía IMAGEM/BUSCAS na narração. O mesmo arquivo passou em processo novo com 14 cenas e 167 palavras faladas. A tela principal recupera o texto bruto do último roteiro enviado após reiniciar o servidor, e a prévia permite conferir a extração antes de produzir.

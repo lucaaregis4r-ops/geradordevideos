@@ -8343,6 +8343,19 @@ def _render_fabrica_de_bermudas_tab():
         "deduplicação visual rigorosa, Safe Area 9:16 e masterização broadcast (-14.0 LUFS)."
     )
 
+    # Recover the most recent submitted script after a server restart.
+    if "bermudas_script_input" not in st.session_state and "fb_script" not in st.session_state:
+        saved_scripts = list(Path("storage/scripts").glob("*/v*.json"))
+        if saved_scripts:
+            latest_script = max(saved_scripts, key=lambda path: path.stat().st_mtime)
+            try:
+                saved_input = json.loads(latest_script.read_text(encoding="utf-8"))
+                if isinstance(saved_input.get("raw_text"), str):
+                    st.session_state["bermudas_script_input"] = saved_input["raw_text"]
+                    st.session_state["bermudas_title_input"] = saved_input.get("title") or "Ensaio Audiovisual"
+            except (OSError, ValueError):
+                pass
+
     with st.expander("Preparar um roteiro na sua IA"):
         guide_path = Path(__file__).resolve().parents[1] / "docs" / "PROMPT_ROTEIRISTA_FABRICA.md"
         if guide_path.is_file():
