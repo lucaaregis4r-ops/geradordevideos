@@ -179,7 +179,7 @@ def test_native_factory_preserves_multibeat_audio_and_rechecks_review(tmp_path):
         image = Image.new("RGB", (1080,1920), color)
         ImageDraw.Draw(image).rectangle((180, 400, 800, 1200), fill=(245,245,245))
         image.save(path)
-        beats.append(VisualBeat(f"b{i}", duration=2, selected_media={"asset_id":f"image_{i}", "local_path":str(path),
+        beats.append(VisualBeat(f"b{i}", duration=2, text_overlay="TESTE", selected_media={"asset_id":f"image_{i}", "local_path":str(path),
                     "media_type":"image", "semantic_score":1, "semantic_status":"reviewed"}))
     scene = Scene("s", "Narração intacta.", "Test fixture", [], humor=True,
                   overlay={"audio_file":str(audio), "audio_duration":4}, visual_beats=beats)

@@ -200,60 +200,23 @@ class CandidateBuilder:
         if not tokens:
             return results
 
-        # 1. Look for local mp4 files
-        for mp4 in self.media_cache_dir.glob("*.mp4"):
-            name = mp4.stem.lower()
-            if any(tok in name for tok in tokens):
-                asset_id = mp4.stem
-                results.append(
-                    MediaCandidate(
-                        provider="local",
-                        asset_id=asset_id,
-                        query=query,
-                        width=1080,
-                        height=1920,
-                        duration=5.0,
-                        url=str(mp4),
-                        local_path=str(mp4),
-                        technical_score=0.95,
-                        final_score=0.95,
-                    )
-                )
-
-        # 2. Look for local image files (jpg, jpeg, png, webp) and convert with Ken Burns
-        photo_dir = self.media_cache_dir / "rendered_photos"
-        photo_dir.mkdir(parents=True, exist_ok=True)
-        from app.services.utils.ken_burns import create_ken_burns_clip
-
-        for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
-            for img_file in self.media_cache_dir.glob(ext):
-                name = img_file.stem.lower()
-                if any(tok in name for tok in tokens):
-                    asset_id = f"photo_{img_file.stem}"
-                    clip_path = photo_dir / f"{asset_id}.mp4"
-                    try:
-                        create_ken_burns_clip(
-                            image_path=img_file,
-                            output_path=clip_path,
-                            duration=target_duration,
-                            motion=preferred_motion,
-                        )
-                        results.append(
-                            MediaCandidate(
-                                provider="local_photo",
-                                asset_id=asset_id,
-                                query=query,
-                                width=1080,
-                                height=1920,
-                                duration=target_duration,
-                                url=str(clip_path),
-                                local_path=str(clip_path),
-                                technical_score=0.97,
-                                final_score=0.97,
-                            )
-                        )
-                    except Exception as e:
-                        logger.warning("Failed to render Ken Burns clip for {}: {}", img_file, e)
+        # Preserve physical media types. Ken Burns belongs to assembly, not retrieval.
+        from .asset_catalog import _measure_media
+        for asset in self.media_cache_dir.iterdir():
+            if asset.suffix.lower() not in {".mp4", ".mov", ".webm", ".jpg", ".jpeg", ".png", ".webp"}:
+                continue
+            if not any(token in asset.stem.lower() for token in tokens):
+                continue
+            width, height, duration = _measure_media(asset)
+            if not width or not height:
+                continue
+            is_image = asset.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+            results.append(MediaCandidate(
+                provider="local", asset_id=asset.stem, query=query,
+                width=width, height=height, duration=duration,
+                media_type="image" if is_image else "video",
+                url=str(asset), local_path=str(asset),
+            ))
 
         return results
 
@@ -296,13 +259,13 @@ class CandidateBuilder:
             result = self.sources_manager.search(SearchRequest(query=query, duration=target_duration, include_archives=visual_type == "archive"))
             candidates.extend(result.candidates)
             self.search_attempts.extend(getattr(self.sources_manager, "last_attempts", []))
-            if not result.candidates:
-                landscape = self.sources_manager.search(SearchRequest(query=query, orientations=("landscape",), duration=target_duration))
-                candidates.extend(landscape.candidates)
-                self.search_attempts.extend(getattr(self.sources_manager, "last_attempts", []))
+            # Search both orientations before considering a photo fallback.
+            landscape = self.sources_manager.search(SearchRequest(query=query, orientations=("landscape",), duration=target_duration, include_archives=visual_type == "archive"))
+            candidates.extend(landscape.candidates)
+            self.search_attempts.extend(getattr(self.sources_manager, "last_attempts", []))
 
         # 5. If few candidates found for video intent, supplement with high-res photos for Ken Burns
-        if not is_photo_intent and len(candidates) < 3:
+        if not is_photo_intent and len([c for c in candidates if c.media_type == "video"]) < 3:
             try:
                 supplements = self.sources_manager.search_photos(
                     query=query,

@@ -90,6 +90,11 @@ pixabay_api_keys = []
 # Register at https://coverr.co/developers?ctx=header_navigation
 coverr_api_keys = []
 
+# Editorial video discovery: bounded public pages, licensed items only.
+editorial_mixkit_enabled = true
+# Historical/specialist archives are opt-in.
+editorial_archive_providers = []
+
 # WaveSpeed AI generates clips from your script keywords with text-to-video
 # models. Create an API key at https://wavespeed.ai
 wavespeed_api_keys = []

@@ -200,7 +200,7 @@ def stage_graph(spec: dict) -> list[Stage]:
                 "scene",
                 timing,
                 scene["footage"],
-                scene.get("source_in", 0), scene.get("source_out"), scene.get("crop_mode", "center"),
+                scene.get("source_in", 0), scene.get("source_out"), scene.get("crop_mode", "center"), "framing-v2",
                 settings.width,
                 settings.height,
                 settings.fps,
@@ -736,9 +736,8 @@ class VideoProject:
                 duration = self._read(Path(results[f"{scene['id']}:timing"]["path"]))[
                     "duration"
                 ]
-                vf = f"scale={settings.width}:{settings.height}:force_original_aspect_ratio=increase,crop={settings.width}:{settings.height},setsar=1,fps={settings.fps}"
-                if scene.get("crop_mode") == "fit":
-                    vf = f"scale={settings.width}:{settings.height}:force_original_aspect_ratio=decrease,pad={settings.width}:{settings.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={settings.fps}"
+                from app.services.graphics.framing import portrait_filter
+                vf = portrait_filter(settings.width, settings.height, settings.fps, scene.get("crop_mode", "center"))
                 if scene.get("source_out") is not None and scene["source_out"] - scene.get("source_in", 0) + 1 / settings.fps < duration:
                     raise ProjectError("selected interval is shorter than narration")
                 source_args = (["-ss", str(scene.get("source_in", 0))] if scene.get("source_out") is not None

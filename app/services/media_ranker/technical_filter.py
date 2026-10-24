@@ -67,6 +67,7 @@ def rank_and_filter_candidates(
     candidates: List[MediaCandidate],
     target_duration: float = 4.0,
     top_k: int = 10,
+    prefer_video: bool = False,
 ) -> List[MediaCandidate]:
     """Scores all candidates technically and returns the top_k best candidates."""
     for c in candidates:
@@ -76,4 +77,12 @@ def rank_and_filter_candidates(
 
     # Sort descending by technical score
     sorted_candidates = sorted(candidates, key=lambda c: c.technical_score, reverse=True)
+    if prefer_video:
+        # Reserve room for actual footage, including unmeasured provider metadata.
+        # Do not let portrait photos eliminate landscape videos before semantics.
+        videos = [c for c in sorted_candidates if c.media_type == "video" and not c.is_synthetic
+                  and (c.duration <= 0 or c.duration >= target_duration)]
+        reserved = videos[:max(1, top_k // 2)]
+        ids = {id(c) for c in reserved}
+        return (reserved + [c for c in sorted_candidates if id(c) not in ids])[:top_k]
     return sorted_candidates[:top_k]

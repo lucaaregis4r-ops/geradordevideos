@@ -399,7 +399,13 @@ elif selected_project_id:
                                             if not target_path or not Path(target_path).exists():
                                                 from app.services.media_ranker.media_searcher import MediaSearcher
                                                 from app.services.media_ranker.schemas import MediaCandidate
-                                                target_path = MediaSearcher()._download_candidate_asset(MediaCandidate.from_dict(cand))
+                                                parsed_candidate = MediaCandidate.from_dict(cand)
+                                                try:
+                                                    target_path = MediaSearcher()._download_candidate_asset(parsed_candidate)
+                                                except Exception as exc:
+                                                    st.error(f"Não foi possível obter este candidato: {exc}")
+                                                    st.stop()
+                                                cand = parsed_candidate.to_dict()
                                                 if not target_path:
                                                     st.error("Download falhou; escolha outro candidato.")
                                                     st.stop()
@@ -438,6 +444,13 @@ elif selected_project_id:
 
         st.divider()
         st.markdown("### Revisão por plano visual")
+        from app.services.assembly.planner import AssemblyPlanner
+        from app.services.assembly.media_mix import summarize_media_mix
+        mix = summarize_media_mix(AssemblyPlanner().build_plan(plan))
+        st.metric("Tempo com filmagem real", f"{mix['video_ratio']:.0%}")
+        if mix["below_target"]:
+            st.info("Meta editorial: pelo menos 65% do tempo com vídeos. Fotos animadas continuam contando como fotos. Use a busca de vídeos nos planos abaixo.")
+
         for scene in plan.scenes:
             targets = scene.visual_beats or [scene]
             for target in targets:
@@ -447,6 +460,16 @@ elif selected_project_id:
                 with st.expander(f"{key} — {selected.get('semantic_status', 'pending_media')}"):
                     st.write(scene.narration)
                     st.write(target.intent)
+                    attempts = getattr(target, "search_attempts", [])
+                    if attempts:
+                        with st.expander("Resultados por fonte"):
+                            labels = {"ok": "Encontrado", "empty_results": "Sem resultados",
+                                      "missing_credentials": "Sem chave configurada", "timeout": "Tempo limite",
+                                      "rate_limited": "Limite de consultas", "authentication_failed": "Credencial recusada",
+                                      "provider_error": "Fonte indisponível"}
+                            st.dataframe([{"Fonte": a.get("provider"),
+                                "Resultado": labels.get(a.get("status"), a.get("status")),
+                                "Candidatos": a.get("candidate_count", 0)} for a in attempts], hide_index=True)
                     local = selected.get("local_path")
                     if local and Path(local).is_file():
                         if Path(local).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
@@ -457,7 +480,7 @@ elif selected_project_id:
                     if beat_id:
                         if target.media_candidates:
                             choice = st.selectbox("Candidato", range(len(target.media_candidates)),
-                                format_func=lambda i: f"{target.media_candidates[i].get('provider', '')}: {target.media_candidates[i].get('description') or target.media_candidates[i].get('asset_id', '')}",
+                                format_func=lambda i: f"{target.media_candidates[i].get('media_type', 'video')} · {target.media_candidates[i].get('provider', '')}: {target.media_candidates[i].get('description') or target.media_candidates[i].get('asset_id', '')}",
                                 key=f"candidate_{key}")
                             if st.button("Trocar este plano", key=f"swap_beat_{key}"):
                                 from app.services.media_ranker.media_searcher import MediaSearcher
@@ -465,7 +488,13 @@ elif selected_project_id:
                                 candidate = target.media_candidates[choice]
                                 candidate_path = candidate.get("local_path")
                                 if not candidate_path or not Path(candidate_path).is_file():
-                                    candidate_path = MediaSearcher()._download_candidate_asset(MediaCandidate.from_dict(candidate))
+                                    parsed_candidate = MediaCandidate.from_dict(candidate)
+                                    try:
+                                        candidate_path = MediaSearcher()._download_candidate_asset(parsed_candidate)
+                                    except Exception as exc:
+                                        st.error(f"Não foi possível obter este candidato: {exc}")
+                                        st.stop()
+                                    candidate = parsed_candidate.to_dict()
                                 if candidate_path:
                                     manager.swap_beat_media(selected_project_id, scene.scene_id, beat_id, candidate_path, candidate)
                                     st.rerun()
@@ -481,6 +510,16 @@ elif selected_project_id:
                                 {"asset_id":f"import_{digest}", "provider":"local", "rights_status":"rights_unknown",
                                  "media_type":"image" if destination.suffix in {".png", ".jpg"} else "video"})
                             st.rerun()
+                        if st.button("Buscar vídeos para este plano", key=f"search_video_{key}"):
+                            manager.search_media_for_beat(selected_project_id, scene.scene_id, beat_id, prefer_video=True)
+                            st.rerun()
+                    source_url = st.text_input("Importar vídeo por link do Mixkit", key=f"source_url_{key}")
+                    if source_url and st.button("Importar vídeo do link", key=f"import_link_{key}"):
+                        try:
+                            manager.import_mixkit_for_beat(selected_project_id, scene.scene_id, beat_id, source_url)
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Não foi possível importar: {exc}")
                     reason = st.text_input("Motivo da avaliação", key=f"reason_{key}")
                     if selected and st.button("Aprovar pertinência", key=f"approve_{key}"):
                         manager.review_media(selected_project_id, scene.scene_id, beat_id, True, reason)

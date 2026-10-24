@@ -101,6 +101,12 @@ class ReviewManager:
         # Update selected_media in plan
         if new_candidate_info:
             updated_info = dict(new_candidate_info)
+            from app.services.media_ranker.asset_catalog import _measure_media
+            from app.services.media_ranker.crop_planner import useful_resolution
+            width, height, duration = _measure_media(footage_file)
+            updated_info.update(width=width, height=height, duration=duration)
+            if min(useful_resolution(width, height)) < 720 and min(width, height) >= 720:
+                updated_info["crop_mode"] = "fit"
             updated_info["local_path"] = str(footage_file)
             target_scene.selected_media = updated_info
         else:
@@ -121,12 +127,12 @@ class ReviewManager:
         with scenes_file.open("w", encoding="utf-8") as f:
             f.write(plan.to_json(indent=2))
 
-        # Reuse the factory gate and rendering path; swaps must not bypass review.
+        # A replacement invalidates relevance approval. Do not synthesize audio or
+        # start an export merely because the user is comparing a candidate.
         self.evaluate_project_quality(project_id)
-        from app.services.factory import ShortsFactory
-        result = ShortsFactory(base_dir=self.storage_dir).render_existing_draft(project_id)
-        result["swapped_scene"] = scene_id
-        return result
+        return {"project_id": project_id, "swapped_scene": scene_id,
+                "status": "pending_review", "video_path": None,
+                "selected_media": target_scene.selected_media}
 
     def direct_script(
         self,
@@ -338,6 +344,12 @@ class ReviewManager:
             raise FileNotFoundError(f_path)
         if new_candidate_info:
             updated = dict(new_candidate_info)
+            from app.services.media_ranker.asset_catalog import _measure_media
+            from app.services.media_ranker.crop_planner import useful_resolution
+            width, height, duration = _measure_media(Path(f_path))
+            updated.update(width=width, height=height, duration=duration)
+            if min(useful_resolution(width, height)) < 720 and min(width, height) >= 720:
+                updated["crop_mode"] = "fit"
             updated["local_path"] = f_path
             updated["semantic_status"] = "unverified"
             updated["semantic_score"] = 0.0
@@ -371,13 +383,16 @@ class ReviewManager:
         path.write_text(plan.to_json(), encoding="utf-8")
         self.evaluate_project_quality(project_id)
 
-    def search_media_for_beat(self, project_id: str, scene_id: str, beat_id: str) -> None:
+    def search_media_for_beat(self, project_id: str, scene_id: str, beat_id: str, prefer_video: bool = False) -> None:
         from dataclasses import replace
         from app.services.media_ranker.media_searcher import MediaSearcher
         path = self.projects_dir / project_id / "scenes.json"
         plan = ScenePlan.from_dict(json.loads(path.read_text(encoding="utf-8")))
         scene = next(s for s in plan.scenes if s.scene_id == scene_id)
         beat = next(b for b in scene.visual_beats if b.beat_id == beat_id)
+        if prefer_video:
+            beat.visual_type = "stock_video"
+            beat.component_type = None
         target = replace(scene, visual_beats=[beat])
         searcher = MediaSearcher(media_cache_dir=self.media_cache_dir)
         from app.services.media_ranker.schemas import MediaCandidate
@@ -391,6 +406,24 @@ class ReviewManager:
         searcher.populate_scene_plan(replace(plan, scenes=[target]))
         path.write_text(plan.to_json(), encoding="utf-8")
         self.evaluate_project_quality(project_id)
+
+    def import_mixkit_for_beat(self, project_id: str, scene_id: str, beat_id: Optional[str], url: str) -> None:
+        """Resolve one user-selected page, download its free rendition, then review."""
+        import re
+        from app.services.media_ranker.schemas import MediaCandidate
+        from app.services.media_ranker.media_searcher import MediaSearcher
+        match = re.fullmatch(r"https://mixkit\.co/free-stock-video/[a-z0-9-]+-(\d+)/?", url.strip())
+        if not match:
+            raise ValueError("Informe a página de um vídeo do Mixkit.")
+        candidate = MediaCandidate(provider="mixkit", asset_id=f"mixkit_{match[1]}",
+            provider_asset_id=match[1], source_page=url.strip(), url=url.strip())
+        path = MediaSearcher(media_cache_dir=self.media_cache_dir)._download_candidate_asset(candidate)
+        if not path:
+            raise ValueError("O download não foi concluído; a seleção anterior foi preservada.")
+        if beat_id:
+            self.swap_beat_media(project_id, scene_id, beat_id, path, candidate.to_dict())
+        else:
+            self.swap_scene_media(project_id, scene_id, path, new_candidate_info=candidate.to_dict())
 
     def evaluate_project_quality(self, project_id: str) -> Dict[str, Any]:
         """Evaluates Quality Gate and generates pre-render reports for a project."""
@@ -413,6 +446,8 @@ class ReviewManager:
         assembly_plan = planner.build_plan(plan)
         checker = QualityChecker()
         score = checker.evaluate(assembly_plan)
+        from app.services.assembly.media_mix import summarize_media_mix
+        media_mix = summarize_media_mix(assembly_plan)
 
         pre_vis = PreVisualizer()
         storyboard = pre_vis.save_reports(
@@ -437,6 +472,7 @@ class ReviewManager:
         return {
             "project_id": project_id,
             "quality_score": score.to_dict(),
+            "media_mix": media_mix,
             "passed": score.passed,
             "alerts": score.alerts,
             "assembly_plan_path": str(assembly_file),

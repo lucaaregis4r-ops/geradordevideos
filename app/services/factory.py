@@ -248,9 +248,11 @@ class ShortsFactory:
             footage_path = segment.asset_path
             scene_key = segment.segment_id
             seg_duration = float(segment.end - segment.start)
+            render_source_in = segment.source_in if segment.asset_type == "video" else 0
+            render_source_out = segment.source_out if segment.asset_type == "video" else None
             source = Path(footage_path) if footage_path else None
             source_stamp = (source.stat().st_size, source.stat().st_mtime_ns) if source and source.is_file() else None
-            identity = json.dumps([footage_path, source_stamp, seg_duration, segment.source_in, segment.source_out,
+            identity = json.dumps(["framing-v4-repeated-overlay", footage_path, source_stamp, seg_duration, segment.source_in, segment.source_out,
                                    segment.crop_mode, segment.overlay_text, segment.text_level,
                                    getattr(scene, "preferred_motion", "")], sort_keys=True)
             cache_key = scene_key + "_" + hashlib.sha256(identity.encode()).hexdigest()[:16]
@@ -328,8 +330,12 @@ class ShortsFactory:
                             video_path=footage_path,
                             overlay_png_path=overlay_png,
                             output_path=comp_clip,
+                            crop_mode=segment.crop_mode,
+                            source_in=render_source_in,
+                            duration=seg_duration,
                         )
                         footage_path = str(comp_clip)
+                        render_source_in, render_source_out = 0, seg_duration
                     except Exception as e:
                         logger.warning("Typography overlay composition failed for segment '{}': {}", scene_key, e)
 
@@ -342,8 +348,8 @@ class ShortsFactory:
                     "narration": narration,
                     "duration": seg_duration,
                     "footage": resolved_path,
-                    "source_in": segment.source_in if segment.asset_type == "video" else 0,
-                    "source_out": segment.source_out if segment.asset_type == "video" else None,
+                    "source_in": render_source_in,
+                    "source_out": render_source_out,
                     "crop_mode": segment.crop_mode,
                     "audio": seg_audio_file,
                 }
@@ -519,9 +525,11 @@ class ShortsFactory:
             footage_path = segment.asset_path
             scene_key = segment.segment_id
             seg_duration = float(segment.end - segment.start)
+            render_source_in = segment.source_in if segment.asset_type == "video" else 0
+            render_source_out = segment.source_out if segment.asset_type == "video" else None
             source = Path(footage_path) if footage_path else None
             source_stamp = (source.stat().st_size, source.stat().st_mtime_ns) if source and source.is_file() else None
-            identity = json.dumps([footage_path, source_stamp, seg_duration, segment.source_in, segment.source_out,
+            identity = json.dumps(["framing-v4-repeated-overlay", footage_path, source_stamp, seg_duration, segment.source_in, segment.source_out,
                                    segment.crop_mode, segment.overlay_text, segment.text_level,
                                    getattr(scene, "preferred_motion", "")], sort_keys=True)
             cache_key = scene_key + "_" + hashlib.sha256(identity.encode()).hexdigest()[:16]
@@ -560,8 +568,12 @@ class ShortsFactory:
                             video_path=footage_path,
                             overlay_png_path=overlay_png,
                             output_path=comp_clip,
+                            crop_mode=segment.crop_mode,
+                            source_in=render_source_in,
+                            duration=seg_duration,
                         )
                         footage_path = str(comp_clip)
+                        render_source_in, render_source_out = 0, seg_duration
                     except Exception as e:
                         logger.warning("Typography overlay composition failed for segment '{}': {}", scene_key, e)
 
@@ -573,8 +585,8 @@ class ShortsFactory:
                     "narration": narration,
                     "duration": seg_duration,
                     "footage": resolved_path,
-                    "source_in": segment.source_in if segment.asset_type == "video" else 0,
-                    "source_out": segment.source_out if segment.asset_type == "video" else None,
+                    "source_in": render_source_in,
+                    "source_out": render_source_out,
                     "crop_mode": segment.crop_mode,
                     "audio": seg_audio_file,
                 }

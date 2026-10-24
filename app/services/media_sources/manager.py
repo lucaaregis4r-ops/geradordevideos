@@ -8,6 +8,8 @@ from __future__ import annotations
 from typing import List, Optional
 from concurrent.futures import ThreadPoolExecutor, wait
 from time import monotonic
+from copy import deepcopy
+from dataclasses import replace
 import requests
 
 from loguru import logger
@@ -16,6 +18,8 @@ from app.services.media_ranker.schemas import MediaCandidate
 from .base import MediaSourceProvider, ProviderCapabilities, SearchRequest, SearchResult
 from .pexels_videos import PexelsVideoProvider
 from .pixabay_videos import PixabayVideoProvider
+from .coverr_videos import CoverrVideoProvider
+from .mixkit import MixkitProvider
 from .openverse import OpenverseProvider
 from .internet_archive import InternetArchiveProvider
 from .pexels_photos import PexelsPhotoProvider
@@ -33,6 +37,8 @@ class MediaSourcesManager:
             self.providers = [
                 PexelsVideoProvider(),
                 PixabayVideoProvider(),
+                CoverrVideoProvider(),
+                MixkitProvider(),
                 PixabayPhotoProvider(),
                 PexelsPhotoProvider(),
                 WikimediaCommonsProvider(),
@@ -43,6 +49,8 @@ class MediaSourcesManager:
         # Specialized archives are opt-in; avoid irrelevant NASA/LOC calls for every garment beat.
         if providers is None:
             from app.config import config
+            if not config.app.get("editorial_mixkit_enabled", True):
+                self.providers = [p for p in self.providers if p.name != "mixkit"]
             enabled = config.app.get("editorial_archive_providers", [])
             if "nasa" in enabled:
                 from .nasa import NASAProvider
@@ -62,10 +70,12 @@ class MediaSourcesManager:
         if self._retry_after.get(provider.name, 0) > start:
             return SearchResult(status="rate_limited", provider=provider.name,
                                 warnings=["retry_after_backoff"])
+        if not getattr(provider, "capabilities", ProviderCapabilities()).supports_orientation:
+            request = replace(request, orientations=("portrait",))
         key = (provider.name, request)
         cached = self._cache.get(key)
         if cached and cached[0] > start:
-            return cached[1]
+            return deepcopy(cached[1])
         try:
             candidates = provider.search(request.query, media_type=request.media_type,
                                          aspect=request.orientations[0], limit=request.limit)
@@ -85,7 +95,7 @@ class MediaSourcesManager:
             result = SearchResult(status="provider_error", warnings=[type(exc).__name__], provider=provider.name)
         result.elapsed_ms = (monotonic() - start) * 1000
         if result.status in {"ok", "empty_results"}:
-            self._cache[key] = (monotonic() + (86400 if result.candidates else 900), result)
+            self._cache[key] = (monotonic() + (86400 if result.candidates else 900), deepcopy(result))
         return result
 
     def search(self, request: SearchRequest, timeout: float = 12.0) -> SearchResult:
@@ -93,7 +103,7 @@ class MediaSourcesManager:
                      and (p.name != "internet_archive" or request.include_archives)]
         futures = {self._pool.submit(self._search_provider, p, request): p for p in providers}
         done, pending = wait(futures, timeout=timeout)
-        attempts = [f.result() for f in done]
+        attempts = [future.result() for future in futures if future in done]
         for future in pending:
             future.cancel()
             attempts.append(SearchResult(status="timeout", elapsed_ms=timeout * 1000, provider=futures[future].name))

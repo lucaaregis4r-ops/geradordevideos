@@ -599,6 +599,7 @@ def search_videos_coverr(
     search_term: str,
     minimum_duration: int,
     video_aspect: VideoAspect = VideoAspect.portrait,
+    strict_errors: bool = False,
 ) -> List[MaterialInfo]:
     """
     Coverr (https://coverr.co) - free HD/4K stock videos,
@@ -642,8 +643,10 @@ def search_videos_coverr(
             headers=headers,
             proxies=config.proxy,
             verify=_get_tls_verify(),
-            timeout=(30, 60),
+            timeout=(3, 8) if strict_errors else (30, 60),
         )
+        if strict_errors:
+            r.raise_for_status()
         response = r.json()
         video_items: List[MaterialInfo] = []
 
@@ -689,6 +692,7 @@ def search_videos_coverr(
             item.duration = duration
             item.source_info = {
                 "provider": "coverr",
+                "description": v.get("description") or v.get("title") or "",
                 "search_term": search_term,
                 "asset_id": str(video_id),
                 "source_page": _safe_public_url(v.get("canonical_url") or v.get("url")),
@@ -702,6 +706,8 @@ def search_videos_coverr(
             video_items.append(item)
         return video_items
     except Exception as e:
+        if strict_errors:
+            raise
         logger.error(
             "coverr video search failed: "
             f"error={type(e).__name__}, detail={_redact_request_error(e, api_key)}"

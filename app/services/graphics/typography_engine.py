@@ -278,6 +278,9 @@ def composite_overlay_to_clip(
     width: int = CANVAS_WIDTH,
     height: int = CANVAS_HEIGHT,
     fps: int = 30,
+    crop_mode: str = "center",
+    source_in: float = 0.0,
+    duration: float | None = None,
 ) -> Path:
     """Composites a transparent PNG overlay onto a video clip using FFmpeg."""
     src = Path(video_path).resolve()
@@ -290,15 +293,15 @@ def composite_overlay_to_clip(
     if not overlay.exists():
         raise FileNotFoundError(f"Overlay PNG not found: {overlay}")
 
+    from .framing import portrait_filter
     filter_complex = (
-        f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height},setsar=1,fps={fps}[bg];"
-        f"[bg][1:v]overlay=0:0:shortest=1[outv]"
+        f"[0:v]{portrait_filter(width, height, fps, crop_mode)}[bg];"
+        f"[bg][1:v]overlay=0:0:eof_action=repeat:shortest=0[outv]"
     )
 
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-i", str(src),
+        "-ss", str(source_in), "-i", str(src),
         "-i", str(overlay),
         "-filter_complex", filter_complex,
         "-map", "[outv]",
@@ -307,6 +310,7 @@ def composite_overlay_to_clip(
         "-preset", "ultrafast",
         "-pix_fmt", "yuv420p",
         "-c:a", "copy",
+        *(["-t", str(duration)] if duration is not None else []),
         str(target),
     ]
 

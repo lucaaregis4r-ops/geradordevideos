@@ -118,11 +118,14 @@ class MediaSearcher:
         # 3. Prefer candidates not yet used globally
         fresh = self.deduplicator.filter_globally_unused(deduped)
 
+        prefer_video = scene.visual_type not in {"stock_image", "photo", "generated_image"}
+
         # 4. First stage: technical filter (take up to 10 candidates)
         tech_filtered = rank_and_filter_candidates(
             candidates=fresh,
             target_duration=target_duration,
             top_k=max(10, candidates_per_scene * 2),
+            prefer_video=prefer_video,
         )
 
         # 5. Second stage: semantic multimodal ranker (take top candidates_per_scene * 2)
@@ -140,7 +143,12 @@ class MediaSearcher:
             visual_category=visual_cat,
             intentional_callback=getattr(scene, "intentional_callback", None),
         )
-        scored.sort(key=lambda c: c.final_score, reverse=True)
+        scored.sort(key=lambda c: (
+            c.semantic_score >= 0.6,
+            prefer_video and c.media_type == "video" and not c.is_synthetic
+            and (c.duration <= 0 or c.duration >= target_duration),
+            c.final_score,
+        ), reverse=True)
         sem_ranked = scored[:candidates_per_scene]
 
         # 6. If scene is graphic/formula/number/quote, prepend programmatic card as #1 candidate
@@ -159,6 +167,11 @@ class MediaSearcher:
 
     def _download_candidate_asset(self, candidate: MediaCandidate) -> str:
         """Downloads candidate asset to local media cache, supporting both videos and images."""
+        if candidate.provider == "mixkit":
+            from app.services.media_sources.mixkit import MixkitProvider
+            MixkitProvider().resolve_candidate(candidate)
+        if candidate.rights_status == "blocked_for_this_use":
+            raise ValueError("asset_rights_blocked")
         if not candidate.url:
             return ""
 
@@ -315,8 +328,8 @@ class MediaSearcher:
                                 logger.warning("Download of candidate {} returned invalid path", candidate.asset_id)
                         except Exception as e:
                             logger.warning(
-                                "Failed to download candidate {} ({}): {}. Trying next candidate...",
-                                candidate.asset_id, candidate.url, e
+                                "Failed to download candidate {} from {}: {}. Trying next candidate...",
+                                candidate.asset_id, candidate.provider, type(e).__name__
                             )
                             candidate.error_detail = str(e)
                     elif not download_selected:
