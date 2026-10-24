@@ -35,6 +35,13 @@ class AssemblySegment:
     thumbnail: str = ""
     phase: str = ""
     is_synthetic: bool = False
+    source_in: float = 0.0
+    source_out: Optional[float] = None
+    crop_mode: str = "center"
+    semantic_status: str = "unverified"
+    material_kind: str = "video"
+    treatment: str = "standard"
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -60,6 +67,10 @@ class AssemblySegment:
             thumbnail=data.get("thumbnail", ""),
             phase=data.get("phase", ""),
             is_synthetic=bool(data.get("is_synthetic", False)),
+            source_in=float(data.get("source_in", 0)), source_out=data.get("source_out"),
+            crop_mode=data.get("crop_mode", "center"), semantic_status=data.get("semantic_status", "unverified"),
+            material_kind=data.get("material_kind", "video"), treatment=data.get("treatment", "standard"),
+            provenance=dict(data.get("provenance", {})),
         )
 
 

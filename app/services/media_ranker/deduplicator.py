@@ -116,7 +116,7 @@ class MediaDeduplicator:
 
             # 3. Creator diversity penalty (Hard Constraint 3: max 2 assets per author across video)
             elif c.creator_name and self._creator_usage.get(c.creator_name.lower(), 0) >= 2:
-                c.final_score *= 0.2
+                continue
 
             # 4. Category similarity penalty: applies if candidate matches the used category
             elif visual_category and self._category_usage.get(visual_category, 0) > 0:

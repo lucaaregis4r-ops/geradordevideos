@@ -59,18 +59,18 @@ def _measure_media(file_path: Path) -> Tuple[int, int, float]:
         res = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=10)
         data = json.loads(res.stdout)
         streams = data.get("streams", [])
-        w, h, dur = 1080, 1920, 0.0
+        w, h, dur = 0, 0, 0.0
         if streams:
             st = streams[0]
-            w = int(st.get("width") or 1080)
-            h = int(st.get("height") or 1920)
-            dur = float(st.get("duration") or 0.0)
+            w = int(st.get("width") or 0)
+            h = int(st.get("height") or 0)
+            dur = float(st.get("duration") or 0.0) if st.get("duration") != "N/A" else 0.0
         if dur == 0.0 and "format" in data:
             dur = float(data["format"].get("duration") or 0.0)
         return w, h, dur
     except Exception as e:
         logger.warning("ffprobe measurement failed for {}: {}", file_path, e)
-        return 1080, 1920, 0.0
+        return 0, 0, 0.0
 
 
 class AssetCatalog:
@@ -114,6 +114,7 @@ class AssetCatalog:
                 );
                 """
             )
+            conn.execute("CREATE TABLE IF NOT EXISTS asset_editorial (asset_id TEXT PRIMARY KEY, metadata TEXT NOT NULL)")
             try:
                 conn.execute("ALTER TABLE assets ADD COLUMN perceptual_hash TEXT;")
             except Exception:
@@ -141,6 +142,12 @@ class AssetCatalog:
         if not local_file.exists():
             return candidate
 
+        with self._get_connection() as conn:
+            conn.execute("INSERT OR REPLACE INTO asset_editorial VALUES (?, ?)",
+                         (candidate.asset_id, json.dumps({"description": candidate.description,
+                          "tags": candidate.tags, "rights_status": candidate.rights_status,
+                          "semantic_status": candidate.semantic_status,
+                          "evaluation_context": candidate.evaluation_context})))
         content_hash = _compute_sha256(local_file)
         w, h, dur = _measure_media(local_file)
 
@@ -230,7 +237,10 @@ class AssetCatalog:
         with self._get_connection() as conn:
             cur = conn.execute("SELECT * FROM assets WHERE asset_id = ?", (asset_id,))
             row = cur.fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            editorial = conn.execute("SELECT metadata FROM asset_editorial WHERE asset_id = ?", (asset_id,)).fetchone()
+            return {**dict(row), **(json.loads(editorial[0]) if editorial else {})}
 
     def get_by_hash(self, content_hash: str) -> Optional[Dict[str, Any]]:
         with self._get_connection() as conn:

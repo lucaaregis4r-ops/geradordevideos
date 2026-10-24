@@ -4,7 +4,7 @@ Defines the structure for candidate stock and local assets according to Section 
 """
 
 from __future__ import annotations
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
 
@@ -14,8 +14,8 @@ class MediaCandidate:
     provider_asset_id: str = ""
     asset_id: str = ""
     query: str = ""
-    width: int = 1080
-    height: int = 1920
+    width: int = 0
+    height: int = 0
     duration: float = 0.0
     url: str = ""
     thumbnail: str = ""
@@ -35,6 +35,15 @@ class MediaCandidate:
     local_path: Optional[str] = None
     is_synthetic: bool = False
     error_detail: Optional[str] = None
+    description: str = ""
+    tags: list[str] = field(default_factory=list)
+    semantic_status: str = "unverified"
+    evaluation_context: str = ""
+    rights_status: str = "rights_unknown"
+    source_in: float = 0.0
+    source_out: Optional[float] = None
+    crop_mode: str = "center"
+
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -46,8 +55,8 @@ class MediaCandidate:
             provider_asset_id=str(data.get("provider_asset_id", "")),
             asset_id=str(data.get("asset_id", "")),
             query=data.get("query", ""),
-            width=int(data.get("width", 1080)),
-            height=int(data.get("height", 1920)),
+            width=int(data.get("width", 0)),
+            height=int(data.get("height", 0)),
             duration=float(data.get("duration", 0.0)),
             url=data.get("url", ""),
             thumbnail=data.get("thumbnail", ""),
@@ -67,4 +76,10 @@ class MediaCandidate:
             local_path=data.get("local_path"),
             is_synthetic=bool(data.get("is_synthetic", False)),
             error_detail=data.get("error_detail"),
+            description=data.get("description", ""), tags=list(data.get("tags", [])),
+            semantic_status=data.get("semantic_status", "unverified"),
+            evaluation_context=data.get("evaluation_context", ""),
+            rights_status=data.get("rights_status", "rights_unknown"),
+            source_in=float(data.get("source_in", 0.0)), source_out=data.get("source_out"),
+            crop_mode=data.get("crop_mode", "center"),
         )

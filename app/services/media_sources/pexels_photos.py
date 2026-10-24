@@ -13,10 +13,11 @@ from loguru import logger
 
 from app.config import config
 from app.services.media_ranker.schemas import MediaCandidate
-from .base import MediaSourceProvider
+from .base import MediaSourceProvider, ProviderCapabilities
 
 
 class PexelsPhotoProvider(MediaSourceProvider):
+    capabilities = ProviderCapabilities(("image",), True, False, True)
     @property
     def name(self) -> str:
         return "pexels_photos"
@@ -70,12 +71,7 @@ class PexelsPhotoProvider(MediaSourceProvider):
                 proxies=config.proxy,
                 timeout=(10, 30),
             )
-            if resp.status_code != 200:
-                logger.warning(
-                    "Pexels photos search returned status {}: {}",
-                    resp.status_code, resp.text[:200]
-                )
-                return []
+            resp.raise_for_status()
 
             data = resp.json()
             photos = data.get("photos", [])
@@ -105,6 +101,7 @@ class PexelsPhotoProvider(MediaSourceProvider):
                         provider_asset_id=photo_id,
                         asset_id=f"pexels_photo_{photo_id}",
                         query=query,
+                        description=photo.get("alt", ""),
                         width=width,
                         height=height,
                         duration=0.0,
@@ -123,6 +120,5 @@ class PexelsPhotoProvider(MediaSourceProvider):
 
             return candidates
 
-        except Exception as e:
-            logger.warning("Pexels photos search failed for query='{}': {}", query, e)
-            return []
+        except Exception:
+            raise

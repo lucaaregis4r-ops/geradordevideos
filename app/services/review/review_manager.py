@@ -6,12 +6,12 @@ Provides the core engine behind the Review Studio (Sections 22 & 23).
 from __future__ import annotations
 from dataclasses import asdict
 import json
+import hashlib
 from pathlib import Path
 import shutil
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.director.schemas import ScenePlan
-from app.services.media_ranker.candidate_builder import _generate_synthetic_clip
 from app.services.video_project import VideoProject
 
 
@@ -60,11 +60,15 @@ class ReviewManager:
             except Exception:
                 pass
 
+        audit_file = folder / "render_audit.json"
+        audit = json.loads(audit_file.read_text()) if audit_file.is_file() else {}
+        publishable = bool(audit.get("publishable") and audit.get("review_sha256") == hashlib.sha256(scenes_file.read_bytes()).hexdigest())
         return {
             "project_id": project_id,
             "plan": plan,
             "raw_plan": plan_data,
             "latest_video": latest_video,
+            "publishable": publishable,
             "current_revision": current_rev,
             "total_scenes": len(plan.scenes),
         }
@@ -109,122 +113,20 @@ class ReviewManager:
                 "final_score": 1.0,
             }
 
+        if target_scene.visual_beats:
+            raise ValueError("This scene has beats; select a specific beat to replace its media.")
+        target_scene.selected_media["semantic_status"] = "unverified"
+        target_scene.selected_media["semantic_score"] = 0.0
         # Save updated scenes.json
         with scenes_file.open("w", encoding="utf-8") as f:
             f.write(plan.to_json(indent=2))
 
-        # Re-build project manifest for VideoProject based on previous revision
-        render_folder = folder / "render_project"
-        vp = VideoProject(render_folder)
-        try:
-            prev_spec = vp.revision()
-            prev_scenes = {s["id"]: s for s in prev_spec.get("scenes", [])}
-            render_settings = prev_spec.get("settings", {"width": 1080, "height": 1920, "fps": 30})
-        except Exception:
-            prev_scenes = {}
-            render_settings = {"width": 1080, "height": 1920, "fps": 30}
-
-        def _extract_asset_path(val: Any) -> Optional[str]:
-            if not val:
-                return None
-            if isinstance(val, dict):
-                rel = val.get("path")
-                if rel:
-                    p = render_folder / rel
-                    if p.exists():
-                        return str(p.resolve())
-                return None
-            p = Path(val)
-            if not p.is_absolute():
-                p = render_folder / p
-            return str(p.resolve()) if p.exists() else str(p)
-
-        project_scenes = []
-        for s in plan.scenes:
-            if s.scene_id == scene_id:
-                # Target swapped scene
-                f_path = str(footage_file.resolve())
-                prev_audio = (prev_scenes.get(s.scene_id) or {}).get("audio")
-                audio_path = _extract_asset_path(prev_audio)
-                if not audio_path:
-                    def_audio = folder / "audio" / f"{s.scene_id}.mp3"
-                    audio_path = str(def_audio.resolve()) if def_audio.exists() else None
-
-                seg_dur = float(s.end - s.start) if (s.end and s.start) else (prev_scenes.get(s.scene_id) or {}).get("duration", 4.0)
-                project_scenes.append(
-                    {
-                        "id": s.scene_id,
-                        "narration": s.narration,
-                        "duration": seg_dur,
-                        "footage": f_path,
-                        "audio": audio_path,
-                    }
-                )
-            elif s.scene_id in prev_scenes:
-                # 100% exact copy of unchanged scene from previous revision to guarantee cache hit!
-                prev_s = prev_scenes[s.scene_id]
-                footage_path = _extract_asset_path(prev_s.get("footage"))
-                audio_path = _extract_asset_path(prev_s.get("audio"))
-                project_scenes.append(
-                    {
-                        "id": s.scene_id,
-                        "narration": prev_s.get("narration", s.narration),
-                        "duration": prev_s.get("duration", 4.0),
-                        "footage": footage_path,
-                        "audio": audio_path,
-                    }
-                )
-            else:
-                selected = s.selected_media or {}
-                f_path = selected.get("local_path")
-                if not f_path or not Path(f_path).exists():
-                    fallback_clip = self.media_cache_dir / f"fallback_{s.scene_id}.mp4"
-                    _generate_synthetic_clip(s.queries[0] if s.queries else s.narration, fallback_clip)
-                    f_path = str(fallback_clip)
-
-                audio_file = folder / "audio" / f"{s.scene_id}.mp3"
-                project_scenes.append(
-                    {
-                        "id": s.scene_id,
-                        "narration": s.narration,
-                        "duration": float(s.end - s.start) if (s.end and s.start) else 4.0,
-                        "footage": str(Path(f_path).resolve()),
-                        "audio": str(audio_file) if audio_file.exists() else None,
-                    }
-                )
-
-        new_rev = vp.create_revision(
-            {
-                "project_id": project_id,
-                "settings": render_settings,
-                "scenes": project_scenes,
-            }
-        )
-        rev_id = new_rev["revision_id"]
-
-        # Track reused vs rebuilt stages
-        reused_stages: List[str] = []
-        built_stages: List[str] = []
-
-        def on_stage(stage, reused):
-            if reused:
-                reused_stages.append(stage.key)
-            else:
-                built_stages.append(stage.key)
-
-        status = vp.render(rev_id, on_stage=on_stage)
-        export_path = status.get("export", {}).get("path")
-
-        return {
-            "project_id": project_id,
-            "revision_id": rev_id,
-            "status": status["state"],
-            "video_path": export_path,
-            "swapped_scene": scene_id,
-            "reused_stages": reused_stages,
-            "built_stages": built_stages,
-            "stages_count": len(reused_stages) + len(built_stages),
-        }
+        # Reuse the factory gate and rendering path; swaps must not bypass review.
+        self.evaluate_project_quality(project_id)
+        from app.services.factory import ShortsFactory
+        result = ShortsFactory(base_dir=self.storage_dir).render_existing_draft(project_id)
+        result["swapped_scene"] = scene_id
+        return result
 
     def direct_script(
         self,
@@ -298,6 +200,10 @@ class ReviewManager:
             scene.preferred_motion = preferred_motion
         if intent is not None:
             scene.intent = intent
+        for target in scene.visual_beats or [scene]:
+            if target.selected_media:
+                target.selected_media["semantic_status"] = "unverified"
+                target.selected_media["semantic_score"] = 0.0
 
         with scenes_file.open("w", encoding="utf-8") as f:
             f.write(plan.to_json(indent=2))
@@ -340,6 +246,9 @@ class ReviewManager:
             beat.text_overlay = text_overlay.strip() if text_overlay.strip() else None
         if intent is not None:
             beat.intent = intent
+        if beat.selected_media:
+            beat.selected_media["semantic_status"] = "unverified"
+            beat.selected_media["semantic_score"] = 0.0
 
         with scenes_file.open("w", encoding="utf-8") as f:
             f.write(plan.to_json(indent=2))
@@ -425,9 +334,13 @@ class ReviewManager:
             raise ValueError(f"Beat '{beat_id}' not found in scene '{scene_id}'")
 
         f_path = str(Path(new_footage_path).resolve())
+        if not Path(f_path).is_file():
+            raise FileNotFoundError(f_path)
         if new_candidate_info:
             updated = dict(new_candidate_info)
             updated["local_path"] = f_path
+            updated["semantic_status"] = "unverified"
+            updated["semantic_score"] = 0.0
             beat.selected_media = updated
         else:
             beat.selected_media = {
@@ -440,7 +353,44 @@ class ReviewManager:
         with scenes_file.open("w", encoding="utf-8") as f:
             f.write(plan.to_json(indent=2))
 
+        self.evaluate_project_quality(project_id)
         return {"project_id": project_id, "scene_id": scene_id, "beat_id": beat_id, "selected_media": beat.selected_media}
+
+    def review_media(self, project_id: str, scene_id: str, beat_id: Optional[str],
+                     approved: bool, reason: str = "") -> None:
+        """Record explicit human relevance review for the current material and context."""
+        path = self.projects_dir / project_id / "scenes.json"
+        plan = ScenePlan.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        scene = next(s for s in plan.scenes if s.scene_id == scene_id)
+        target = next(b for b in scene.visual_beats if b.beat_id == beat_id) if beat_id else scene
+        if not target.selected_media:
+            raise ValueError("pending_media")
+        target.selected_media["semantic_status"] = "reviewed" if approved else "rejected"
+        target.selected_media["semantic_score"] = 1.0 if approved else 0.0
+        target.selected_media["review_reason"] = reason
+        path.write_text(plan.to_json(), encoding="utf-8")
+        self.evaluate_project_quality(project_id)
+
+    def search_media_for_beat(self, project_id: str, scene_id: str, beat_id: str) -> None:
+        from dataclasses import replace
+        from app.services.media_ranker.media_searcher import MediaSearcher
+        path = self.projects_dir / project_id / "scenes.json"
+        plan = ScenePlan.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        scene = next(s for s in plan.scenes if s.scene_id == scene_id)
+        beat = next(b for b in scene.visual_beats if b.beat_id == beat_id)
+        target = replace(scene, visual_beats=[beat])
+        searcher = MediaSearcher(media_cache_dir=self.media_cache_dir)
+        from app.services.media_ranker.schemas import MediaCandidate
+        for other_scene in plan.scenes:
+            for other in other_scene.visual_beats or [other_scene]:
+                if other is beat:
+                    if other.selected_media and other.selected_media.get("semantic_status") == "rejected":
+                        searcher.deduplicator.block_asset(other.selected_media["asset_id"])
+                elif other.selected_media:
+                    searcher.deduplicator.mark_used(MediaCandidate.from_dict(other.selected_media))
+        searcher.populate_scene_plan(replace(plan, scenes=[target]))
+        path.write_text(plan.to_json(), encoding="utf-8")
+        self.evaluate_project_quality(project_id)
 
     def evaluate_project_quality(self, project_id: str) -> Dict[str, Any]:
         """Evaluates Quality Gate and generates pre-render reports for a project."""

@@ -299,7 +299,10 @@ def test_assembly_planner_narrative_durations_and_categories():
     assert seg4.asset_id == "asset_1"
 
 
-def test_quality_checker():
+def test_quality_checker(tmp_path):
+    from PIL import Image
+    for i in range(5):
+        Image.new("RGB", (720, 1280), (30 + i * 20, 100, 150)).save(tmp_path / f"asset_{i}.png")
     """Validates quality gating: passes clean plans and catches duplicates/missing visuals."""
     checker = QualityChecker()
 
@@ -310,8 +313,9 @@ def test_quality_checker():
             start=i * 2.0,
             end=(i + 1) * 2.0,
             asset_id=f"asset_{i}",
-            asset_type="video" if i % 2 == 0 else "photo",
-            asset_path=f"/tmp/asset_{i}.mp4",
+            asset_type="graphic" if i % 2 == 0 else "photo",
+            asset_path=str(tmp_path / f"asset_{i}.png"),
+            semantic_score=0.9, semantic_status="reviewed",
             purpose="explanation" if i % 2 == 0 else "concept",
         )
         for i in range(5)

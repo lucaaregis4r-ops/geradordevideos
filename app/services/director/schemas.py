@@ -77,6 +77,15 @@ class MotionType(str, Enum):
     STATIC = "static"
 
 
+class ComponentType(str, Enum):
+    STANDARD = "standard"
+    EDITORIAL_CROP = "editorial_crop"
+    SPLIT_SCREEN = "split_screen"
+    DATA_CARD = "data_card"
+    PRICE_TAG = "price_tag"
+    HISTORICAL_ARCHIVE = "historical_archive"
+
+
 @dataclass
 class VisualBeat:
     """A visual shot within a spoken narration scene.
@@ -89,7 +98,7 @@ class VisualBeat:
     intent: str = ""
     queries: list[str] = field(default_factory=list)
     visual_type: str = "stock_video"
-    component_type: str = "standard"     # standard, editorial_crop, split_screen, data_card, price_tag, historical_archive
+    component_type: str = ComponentType.STANDARD.value     # standard, editorial_crop, split_screen, data_card, price_tag, historical_archive
     preferred_motion: str = "lateral"
     shot_scale: str = "medium"           # wide, medium, close_up, extreme_close_up
     text_overlay: Optional[str] = None
@@ -97,6 +106,18 @@ class VisualBeat:
     transition: str = "cut"
     selected_media: Optional[dict[str, Any]] = None
     media_candidates: list[dict[str, Any]] = field(default_factory=list)
+
+    subject: str = ""
+    action: str = ""
+    context: str = ""
+    required_elements: list[str] = field(default_factory=list)
+    forbidden_elements: list[str] = field(default_factory=list)
+    preferred_media: str = "video"
+    fallback_media: list[str] = field(default_factory=lambda: ["image"])
+    temporal_context: str = ""
+    continuity_group: str = ""
+    status: str = "pending_media"
+    search_attempts: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -117,6 +138,17 @@ class VisualBeat:
             transition=str(data.get("transition", "cut")).lower(),
             selected_media=data.get("selected_media"),
             media_candidates=list(data.get("media_candidates", [])),
+            subject=data.get("subject", ""),
+            action=data.get("action", ""),
+            context=data.get("context", ""),
+            required_elements=data.get("required_elements", []),
+            forbidden_elements=data.get("forbidden_elements", []),
+            preferred_media=data.get("preferred_media", "video"),
+            fallback_media=data.get("fallback_media", ["image"]),
+            temporal_context=data.get("temporal_context", ""),
+            continuity_group=data.get("continuity_group", ""),
+            status=data.get("status", "pending_media"),
+            search_attempts=list(data.get("search_attempts", [])),
         )
 
 

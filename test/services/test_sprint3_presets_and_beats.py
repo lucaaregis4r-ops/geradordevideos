@@ -281,7 +281,10 @@ class TestEditorialComponents:
 class TestQualityCheckerWithBeats:
     """Tests QualityChecker on a multi-beat assembly plan."""
 
-    def test_quality_checker_passes_valid_beat_plan(self):
+    def test_quality_checker_passes_valid_beat_plan(self, tmp_path):
+        from PIL import Image
+        for i in (1, 2):
+            Image.new("RGB", (720, 1280), (i * 50, 100, 150)).save(tmp_path / f"{i}.png")
         checker = QualityChecker()
         scene = Scene(
             scene_id="scene_001",
@@ -297,13 +300,13 @@ class TestQualityCheckerWithBeats:
                     beat_id="beat_a",
                     queries=["query one"],
                     duration=2.0,
-                    selected_media={"asset_id": "asset_1", "url": "http://a.com/1.mp4", "semantic_score": 0.85},
+                    selected_media={"asset_id": "asset_1", "local_path": str(tmp_path / "1.png"), "media_type": "image", "semantic_score": 0.85, "semantic_status": "reviewed"},
                 ),
                 VisualBeat(
                     beat_id="beat_b",
                     queries=["query two"],
                     duration=2.0,
-                    selected_media={"asset_id": "asset_2", "url": "http://a.com/2.mp4", "semantic_score": 0.80},
+                    selected_media={"asset_id": "asset_2", "local_path": str(tmp_path / "2.png"), "media_type": "image", "semantic_score": 0.80, "semantic_status": "reviewed"},
                 ),
             ],
         )

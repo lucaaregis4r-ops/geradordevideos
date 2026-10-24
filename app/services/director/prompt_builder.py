@@ -36,7 +36,7 @@ REGRA ABSOLUTA NÚMERO 2 — PROIBIÇÃO DE BUSCAS ABSTRATAS:
   Exemplo correto: "garment factory workers sewing shirts", "telescope observatory night stars", "cotton harvest machine in field".
 
 DIRETRIZES DE DIREÇÃO VISUAL E EDITORIAL ({preset.name}):
-1. Cadência Recomendada: Cenas entre {preset.target_pace_seconds[0]:.1f}s e {preset.target_pace_seconds[1]:.1f}s.
+1. Cadência Recomendada: Planos visuais entre {preset.target_pace_seconds[0]:.1f}s e {preset.target_pace_seconds[1]:.1f}s.
 2. Função Narrativa (narrative_function):
    - "hook": Fisgar atenção inicial com imagens de alto impacto.
    - "setup": Estabelecer a premissa ou apresentar o objeto/pergunta inicial.
@@ -44,7 +44,7 @@ DIRETRIZES DE DIREÇÃO VISUAL E EDITORIAL ({preset.name}):
    - "explanation": Montagem didática sequencial construindo raciocínio.
    - "concept": Definição ou cartela gráfica conceitual.
    - "contrast": Choque visual entre dois mundos ou dados incompatíveis.
-   - "joke": Alívio cômico seco e literal (duração curta: 0.8s a 1.5s).
+   - "joke": Alívio cômico seco e literal (plano curto: 0.8s a 1.5s; nunca truncar a narração).
    - "reveal": Revelação dos bastidores, mecanismo oculto ou virada argumentativa.
    - "transition": Conexão rápida entre ideias.
    - "conclusion": Pergunta reflexiva final, corte preto ou fechamento.
@@ -60,6 +60,10 @@ DIRETRIZES DE DIREÇÃO VISUAL E EDITORIAL ({preset.name}):
    - "historical_archive": Fotografia de época com destaque/badge e textura de documento.
 5. Multi-Planos por Fala (visual_beats):
    - Para falas ricas ou com mais de 4 segundos, você PODE incluir uma lista "visual_beats" dentro da cena.
+   - Inclua subject, action, context, required_elements, forbidden_elements, preferred_media,
+     fallback_media, temporal_context e continuity_group em cada beat. Use valores descritivos em inglês para busca.
+   - standard significa filmagem real. editorial_crop e historical_archive exigem material real.
+   - Não invente metáforas visuais. Preço exato é overlay; não busque moeda estrangeira para preço em reais.
    - Cada beat define um plano visual diferente (com suas próprias queries, component_type e intent) enquanto a fala corre contínua.
 6. Entidades Concretas (entities):
    - Liste os substantivos e objetos físicos presentes no trecho (ex: ["camiseta", "etiqueta", "dinheiro"]).
@@ -79,15 +83,15 @@ Retorne APENAS um objeto JSON com a chave "scenes" contendo a lista das cenas. E
     {
       "scene_id": "scene_001",
       "narration": "Quer entender como a economia funciona de verdade?",
-      "intent": "Fisgar o espectador com imagem de riqueza clássica de finanças",
+      "intent": "Mostrar uma camiseta exposta com etiqueta de preço",
       "narrative_function": "hook",
       "narrative_phase": "aspiration",
-      "entities": ["economia", "riqueza"],
+      "entities": ["camiseta", "etiqueta"],
       "visual_type": "stock_video",
       "queries": [
-        "luxury business skyscrapers skyline dubai",
-        "expensive sports car driving city",
-        "stock market display board green"
+        "hand holding clothing price tag close up",
+        "t shirt price tag retail",
+        "clothing label store hands"
       ],
       "preferred_motion": "lateral",
       "importance": 4,
@@ -108,11 +112,11 @@ Retorne APENAS um objeto JSON com a chave "scenes" contendo a lista das cenas. E
       "queries": [
         "ceramic coffee mug on table steam",
         "pouring fresh coffee mug closeup",
-        "mug price tag twenty dollars store"
+        "ceramic mug price label store"
       ],
       "preferred_motion": "zoom_in",
       "importance": 3,
-      "text_overlay": "R$ 19,90",
+      "text_overlay": "R$ 20",
       "text_level": "title",
       "humor": false,
       "duration_hint": 3.0,
@@ -120,21 +124,21 @@ Retorne APENAS um objeto JSON com a chave "scenes" contendo a lista das cenas. E
     },
     {
       "scene_id": "scene_003",
-      "narration": "O petróleo caiu.",
-      "intent": "Interpretar metáfora econômica de forma literal absurda",
-      "narrative_function": "joke",
+      "narration": "Antes da etiqueta, alguém cortou o tecido.",
+      "intent": "Mostrar as mãos de um trabalhador cortando tecido",
+      "narrative_function": "explanation",
       "narrative_phase": "commodity",
-      "entities": ["petróleo", "barril"],
+      "entities": ["tecido", "tesoura"],
       "visual_type": "stock_video",
       "queries": [
-        "oil barrel falling dropped on ground literal",
-        "crude oil container tumbling ground"
+        "garment worker cutting fabric",
+        "tailor scissors cutting cotton cloth"
       ],
       "preferred_motion": "static",
       "importance": 2,
       "text_overlay": null,
       "text_level": "caption",
-      "humor": true,
+      "humor": false,
       "duration_hint": 1.2,
       "intentional_callback": null
     }

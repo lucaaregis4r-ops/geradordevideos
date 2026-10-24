@@ -3,7 +3,7 @@
 Coordinates:
 1. Pexels (if API key available)
 2. Pixabay (if API key available)
-3. Coverr (if API key available)
+3. Open photo and archive providers
 4. Local Smart Library (storage/media_cache/)
 5. Synthetic Video Generator fallback (ensures pipeline never fails for tests/prototypes)
 """
@@ -14,7 +14,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from app.config import config
 from app.models.schema import VideoAspect
@@ -267,7 +267,8 @@ class CandidateBuilder:
     ) -> List[MediaCandidate]:
         """Searches providers and local library for a given query string."""
         candidates: List[MediaCandidate] = []
-        is_photo_intent = visual_type.lower() in ("stock_image", "photo", "archive", "generated_image")
+        self.search_attempts = []
+        is_photo_intent = visual_type.lower() in ("stock_image", "photo", "generated_image")
 
         # 1. Search local library first (including photos with Ken Burns)
         local_matches = self.search_local_library(
@@ -286,88 +287,19 @@ class CandidateBuilder:
                     limit_per_provider=4,
                 )
                 candidates.extend(photo_candidates)
+                self.search_attempts.extend(getattr(self.sources_manager, "last_attempts", []))
             except Exception as e:
                 logger.warning("Sources manager photo search failed for query='{}': {}", query, e)
 
-        # 3. Check Pexels Video (if video intent and keys present)
-        pexels_keys = config.app.get("pexels_api_keys", [])
-        if pexels_keys and not is_photo_intent:
-            try:
-                min_dur = max(3, int(target_duration))
-                raw_pexels = material.search_videos_pexels(
-                    search_term=query,
-                    minimum_duration=min_dur,
-                    video_aspect=VideoAspect.portrait,
-                )
-                for item in raw_pexels:
-                    s_info = item.source_info if isinstance(item.source_info, dict) else {}
-                    creator = s_info.get("creator") or {}
-                    rendition = s_info.get("rendition") or {}
-                    w = int(rendition.get("width") or 1080)
-                    h = int(rendition.get("height") or 1920)
-                    orig_id = str(s_info.get("asset_id") or "")
-                    asset_id = f"pexels_vid_{orig_id}" if orig_id else hashlib.md5(item.url.encode()).hexdigest()[:12]
-
-                    candidates.append(
-                        MediaCandidate(
-                            provider="pexels",
-                            provider_asset_id=orig_id,
-                            asset_id=asset_id,
-                            query=query,
-                            width=w,
-                            height=h,
-                            duration=float(item.duration),
-                            url=item.url,
-                            source_page=s_info.get("source_page", ""),
-                            media_type="video",
-                            creator_name=creator.get("name", "") if isinstance(creator, dict) else "",
-                            creator_url=creator.get("url", "") if isinstance(creator, dict) else "",
-                            license_id="Pexels License",
-                            license_url="https://www.pexels.com/license/",
-                        )
-                    )
-            except Exception as e:
-                logger.warning("Pexels video search failed for query='{}': {}", query, e)
-
-        # 4. Check Pixabay Video
-        pixabay_keys = config.app.get("pixabay_api_keys", [])
-        if pixabay_keys and not is_photo_intent:
-            try:
-                min_dur = max(3, int(target_duration))
-                raw_pixabay = material.search_videos_pixabay(
-                    search_term=query,
-                    minimum_duration=min_dur,
-                    video_aspect=VideoAspect.portrait,
-                )
-                for item in raw_pixabay:
-                    s_info = item.source_info if isinstance(item.source_info, dict) else {}
-                    creator = s_info.get("creator") or {}
-                    rendition = s_info.get("rendition") or {}
-                    w = int(rendition.get("width") or 1080)
-                    h = int(rendition.get("height") or 1920)
-                    orig_id = str(s_info.get("asset_id") or "")
-                    asset_id = f"pixabay_vid_{orig_id}" if orig_id else hashlib.md5(item.url.encode()).hexdigest()[:12]
-
-                    candidates.append(
-                        MediaCandidate(
-                            provider="pixabay",
-                            provider_asset_id=orig_id,
-                            asset_id=asset_id,
-                            query=query,
-                            width=w,
-                            height=h,
-                            duration=float(item.duration),
-                            url=item.url,
-                            source_page=s_info.get("source_page", ""),
-                            media_type="video",
-                            creator_name=creator.get("name", "") if isinstance(creator, dict) else "",
-                            creator_url=creator.get("url", "") if isinstance(creator, dict) else "",
-                            license_id="Pixabay License",
-                            license_url="https://pixabay.com/service/license-summary/",
-                        )
-                    )
-            except Exception as e:
-                logger.warning("Pixabay video search failed for query='{}': {}", query, e)
+        if not is_photo_intent:
+            from app.services.media_sources.base import SearchRequest
+            result = self.sources_manager.search(SearchRequest(query=query, duration=target_duration, include_archives=visual_type == "archive"))
+            candidates.extend(result.candidates)
+            self.search_attempts.extend(getattr(self.sources_manager, "last_attempts", []))
+            if not result.candidates:
+                landscape = self.sources_manager.search(SearchRequest(query=query, orientations=("landscape",), duration=target_duration))
+                candidates.extend(landscape.candidates)
+                self.search_attempts.extend(getattr(self.sources_manager, "last_attempts", []))
 
         # 5. If few candidates found for video intent, supplement with high-res photos for Ken Burns
         if not is_photo_intent and len(candidates) < 3:
@@ -378,57 +310,9 @@ class CandidateBuilder:
                     limit_per_provider=2,
                 )
                 candidates.extend(supplements)
+                self.search_attempts.extend(getattr(self.sources_manager, "last_attempts", []))
             except Exception as e:
                 logger.warning("Supplementary photo search failed for query='{}': {}", query, e)
-
-        # 6. Progressive distillation fallback: if query was too specific, search core terms
-        stop_words = {"the", "and", "with", "from", "that", "this", "some", "into", "closeup", "detail"}
-        words = [w for w in query.strip().split() if len(w) > 2 and w.lower() not in stop_words]
-        if len(candidates) < 2 and len(words) >= 3:
-            distilled_queries = [
-                " ".join(words[:2]),
-                words[0],
-            ]
-            for simp_q in distilled_queries:
-                if len(candidates) >= 3:
-                    break
-                try:
-                    if pixabay_keys and not is_photo_intent:
-                        raw_pixabay = material.search_videos_pixabay(
-                            search_term=simp_q,
-                            minimum_duration=max(3, int(target_duration)),
-                            video_aspect=VideoAspect.portrait,
-                        )
-                        for item in raw_pixabay:
-                            s_info = item.source_info if isinstance(item.source_info, dict) else {}
-                            creator = s_info.get("creator") or {}
-                            orig_id = str(s_info.get("asset_id") or "")
-                            candidates.append(
-                                MediaCandidate(
-                                    provider="pixabay",
-                                    provider_asset_id=orig_id,
-                                    asset_id=f"pixabay_vid_{orig_id}" if orig_id else hashlib.md5(item.url.encode()).hexdigest()[:12],
-                                    query=simp_q,
-                                    width=1080,
-                                    height=1920,
-                                    duration=float(item.duration),
-                                    url=item.url,
-                                    media_type="video",
-                                    creator_name=creator.get("name", "") if isinstance(creator, dict) else "",
-                                    creator_url=creator.get("url", "") if isinstance(creator, dict) else "",
-                                    license_id="Pixabay License",
-                                    license_url="https://pixabay.com/service/license-summary/",
-                                )
-                            )
-                    if len(candidates) < 3:
-                        simp_photos = self.sources_manager.search_photos(
-                            query=simp_q,
-                            aspect="portrait",
-                            limit_per_provider=3,
-                        )
-                        candidates.extend(simp_photos)
-                except Exception as e:
-                    logger.debug("Distilled query search failed for '{}': {}", simp_q, e)
 
         # 7. Fallback generator only if explicitly enabled
         if not candidates and enable_synthetic_fallback:

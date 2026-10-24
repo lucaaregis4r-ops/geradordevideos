@@ -6,6 +6,7 @@ score = 0.60 * semantic + 0.15 * resolution + 0.10 * orientation + 0.10 * motion
 
 from __future__ import annotations
 import json
+import hashlib
 from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional
@@ -90,8 +91,13 @@ class SemanticRanker:
         No artificial 0.90 floor for smart_library — local assets compete fairly on relevance.
         Prior editorial curation is captured solely via the previous_approval weight (0.05).
         """
-        if candidate.semantic_score > 0.0:
+        context = hashlib.sha256(f"metadata-v2:{scene_narration}:{scene_intent}".encode()).hexdigest()
+        if candidate.evaluation_context == context and candidate.semantic_status in {"visual_verified", "reviewed"}:
             return candidate.semantic_score
+        candidate.evaluation_context = context
+        candidate.semantic_status = "metadata_only" if candidate.description or candidate.tags else "unverified"
+        if candidate.semantic_status == "unverified":
+            return 0.0
 
         # Stopwords in PT and EN to prevent trivial conjunction/preposition matches
         stopwords = {
@@ -103,7 +109,7 @@ class SemanticRanker:
         }
 
         # Build token set from candidate attributes (query, category, creator, source)
-        cand_text = f"{candidate.query} {candidate.category} {candidate.creator_name} {candidate.source_page}"
+        cand_text = f"{candidate.description} {' '.join(candidate.tags)}"
         cand_words = {
             w for w in re.findall(r"\w+", cand_text.lower())
             if len(w) > 2 and w not in stopwords
@@ -175,7 +181,7 @@ class SemanticRanker:
                 ori_score = 0.3
 
             # Motion: default 0.8
-            mot_score = 0.8
+            mot_score = 0.0  # Unmeasured movement is not evidence of action.
 
             # Previous approval: 1.0 for smart_library or approved cache, 0.0 otherwise
             app_score = 1.0 if c.provider in {"smart_library", "local"} else 0.0
