@@ -8343,6 +8343,22 @@ def _render_fabrica_de_bermudas_tab():
         "deduplicação visual rigorosa, Safe Area 9:16 e masterização broadcast (-14.0 LUFS)."
     )
 
+    with st.expander("Preparar um roteiro na sua IA"):
+        guide_path = Path(__file__).resolve().parents[1] / "docs" / "PROMPT_ROTEIRISTA_FABRICA.md"
+        if guide_path.is_file():
+            guide = guide_path.read_text(encoding="utf-8")
+            st.write("Copie estas instruções para a IA que escreve seus roteiros e substitua o campo final pelo seu tema. Cole aqui o roteiro completo que ela devolver.")
+            st.code(guide, language="markdown")
+            st.download_button("Baixar instruções para a IA", guide, file_name="prompt_roteirista_fabrica.md", mime="text/markdown")
+        example_path = Path(__file__).resolve().parents[1] / "docs" / "exemplos" / "roteiro_caneca_fabrica_v1.md"
+        if example_path.is_file() and st.button("Carregar exemplo no formato Fábrica V1", key="load_factory_v1"):
+            example = example_path.read_text(encoding="utf-8")
+            st.session_state["fb_script"] = example
+            st.session_state["bermudas_script_input"] = example
+            st.session_state["fb_title"] = "A história de uma caneca"
+            st.session_state["bermudas_title_input"] = "A história de uma caneca"
+            st.rerun()
+
     st.write("**💡 Carregar Roteiro de Exemplo:**")
     col_ex1, col_ex2, col_ex3 = st.columns(3)
     with col_ex1:
@@ -8429,6 +8445,9 @@ def _render_fabrica_de_bermudas_tab():
         from app.services.editorial.directives import strip_stage_directions
         with st.expander("Conferir a narração que será falada"):
             st.text(strip_stage_directions(script_text))
+        from app.services.director.screenplay_director import is_factory_screenplay
+        if is_factory_screenplay(script_text):
+            st.caption("Formato Fábrica V1: os planos, buscas e textos serão lidos diretamente, preservando a narração.")
 
     col_opt1, col_opt2 = st.columns([1.6, 1.0])
     with col_opt1:

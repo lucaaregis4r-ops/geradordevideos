@@ -9,6 +9,7 @@ from dataclasses import replace, asdict
 from time import monotonic
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -111,6 +112,16 @@ class MediaSearcher:
                 self.search_attempts.extend({"scene_id": scene.scene_id, "query": q,
                     "provider": a.provider, "status": a.status, "elapsed_ms": a.elapsed_ms,
                     "candidate_count": len(a.candidates)} for a in attempts)
+
+        # Explicit exclusions use provider descriptions/tags, never the query as evidence.
+        context = self._beat_context.get(scene.scene_id)
+        excluded = context.forbidden_elements if context else []
+        if excluded:
+            all_raw_candidates = [c for c in all_raw_candidates if not any(
+                re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)",
+                          f"{c.description} {' '.join(c.tags)}", re.IGNORECASE)
+                for term in excluded if term.strip()
+            )]
 
         # 2. Deduplicate within scene
         deduped = self.deduplicator.deduplicate_within_scene(all_raw_candidates)
@@ -240,6 +251,7 @@ class MediaSearcher:
 
     def search_for_beat(self, scene: Scene, beat: VisualBeat, **kwargs) -> list[MediaCandidate]:
         """Use the beat's own retrieval context while preserving the approved narration."""
+        self._beat_context[beat.beat_id] = beat
         target = replace(scene, scene_id=beat.beat_id, intent=beat.intent,
                          queries=list(beat.queries), visual_type=beat.visual_type,
                          preferred_motion=beat.preferred_motion, visual_beats=[],

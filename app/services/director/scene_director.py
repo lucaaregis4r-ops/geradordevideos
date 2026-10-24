@@ -438,7 +438,10 @@ class SceneDirector:
 
         # 2. Invoke provider
         settings = {"brand_preset": brand_preset}
-        plan = self.provider.generate_plan(script_version, settings)
+        from .screenplay_director import build_screenplay_plan
+        plan = build_screenplay_plan(script_version, brand_preset)
+        if plan is None:
+            plan = self.provider.generate_plan(script_version, settings)
         plan.title = title
         valid, errors = validate_scene_plan(plan, script_version.clean_narration)
         if not valid:
