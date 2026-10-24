@@ -8423,8 +8423,12 @@ def _render_fabrica_de_bermudas_tab():
         value=st.session_state.get("bermudas_script_input", default_script),
         height=140,
         key="fb_script",
-        help="O texto falado não será alterado. Cada frase se torna uma cena com busca concreta de imagens.",
+        help="Aceita narração simples ou roteiro com blocos IMAGEM, NARRAÇÃO e TEXTO. Apenas a narração será falada.",
     )
+    if script_text.strip():
+        from app.services.editorial.directives import strip_stage_directions
+        with st.expander("Conferir a narração que será falada"):
+            st.text(strip_stage_directions(script_text))
 
     col_opt1, col_opt2 = st.columns([1.6, 1.0])
     with col_opt1:

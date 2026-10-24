@@ -256,6 +256,11 @@ class GeminiDirectorProvider(DirectorProvider):
             clean_script=script.clean_narration,
             channel=script.channel,
             brand_style=brand_style,
+            directives_hint=(
+                "Referência de imagens, cortes e textos de tela. Use somente para direção visual; "
+                "o texto de narration deve vir exclusivamente do ROTEIRO APROVADO acima.\n"
+                + script.raw_text
+            ) if script.raw_text != script.clean_narration else None,
         )
 
         sys_instruction = build_system_instruction(brand_style)
@@ -384,7 +389,11 @@ class GeminiDirectorProvider(DirectorProvider):
         # Validate fidelity
         valid, errors = validate_scene_plan(plan, script.clean_narration)
         if not valid:
-            raise ValueError(f"Scene plan validation failed: {'; '.join(errors)}")
+            logger.warning(
+                "Director returned altered narration; rebuilding scene boundaries from the approved script: %s",
+                "; ".join(errors),
+            )
+            return LocalRuleDirectorProvider().generate_plan(script, settings)
 
         return plan
 
