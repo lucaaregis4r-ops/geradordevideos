@@ -8463,6 +8463,12 @@ def _render_fabrica_de_bermudas_tab():
     use_brand = st.checkbox("Aplicar identidade salva", value=False,
                             help="Usa a voz, velocidade, cor de destaque e trilha salvas no editor de identidade.")
     if use_brand:
+        from app.services.branding.library import list_presets, preset_label
+        presets = list_presets()
+        selected_preset = st.selectbox("Canal / preset de identidade", ["legacy", *presets],
+            format_func=lambda key: "Identidade anterior" if key == "legacy" else preset_label(presets[key]))
+        if selected_preset in presets:
+            saved_kit = presets[selected_preset]
         st.caption(f"Identidade: {saved_kit.name} · Voz: {saved_kit.voice} · {saved_kit.voice_rate:.2f}x")
     st.page_link("pages/4_🎨_Identidade.py", label="Editar identidade e ouvir vozes", icon="🎨")
 

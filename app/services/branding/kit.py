@@ -2,11 +2,14 @@
 import json
 from pathlib import Path
 from pydantic import BaseModel, Field
+from .looks import VisualLook
 
 
 class BrandKit(BaseModel):
-    version: int = 1
+    version: int = 2
+    look: VisualLook = Field(default_factory=VisualLook)
     name: str = 'Minha identidade'
+    channel: str = ''
     accent: str = Field(default='#FFD700', pattern=r'^#[0-9a-fA-F]{6}$')
     voice: str = 'pt-BR-FranciscaNeural-Female'
     voice_rate: float = Field(default=1.0, ge=0.8, le=1.3)

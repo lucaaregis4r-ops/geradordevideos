@@ -271,6 +271,7 @@ class ShortsFactory:
             source_stamp = (source.stat().st_size, source.stat().st_mtime_ns) if source and source.is_file() else None
             identity = json.dumps(["framing-v4-repeated-overlay", footage_path, source_stamp, seg_duration, segment.source_in, segment.source_out,
                                    segment.crop_mode, segment.overlay_text, segment.text_level, self.typography_engine.accent,
+                                   kit.look.model_dump() if kit else None,
                                    getattr(scene, "preferred_motion", "")], sort_keys=True)
             cache_key = scene_key + "_" + hashlib.sha256(identity.encode()).hexdigest()[:16]
 
@@ -322,6 +323,12 @@ class ShortsFactory:
                     logger.warning("Ken Burns animation failed for '{}': {}", footage_path, e)
 
             # If segment has text overlay and is not a component card, render safe area PNG and composite onto clip
+            if kit and kit.look.filters() and segment.asset_type in {"video", "photo", "image"}:
+                from app.services.branding.looks import render_look
+                footage_path = str(render_look(footage_path, kit.look, project_folder / "looks",
+                                               source_in=render_source_in, duration=seg_duration))
+                render_source_in, render_source_out = 0, seg_duration
+
             if segment.asset_type not in ("price_tag", "split_screen", "historical_archive", "data_card", "editorial_crop"):
                 if segment.overlay_text and segment.overlay_text.strip() and footage_path and Path(footage_path).exists():
                     try:
@@ -552,6 +559,7 @@ class ShortsFactory:
             source_stamp = (source.stat().st_size, source.stat().st_mtime_ns) if source and source.is_file() else None
             identity = json.dumps(["framing-v4-repeated-overlay", footage_path, source_stamp, seg_duration, segment.source_in, segment.source_out,
                                    segment.crop_mode, segment.overlay_text, segment.text_level, self.typography_engine.accent,
+                                   kit.look.model_dump() if kit else None,
                                    getattr(scene, "preferred_motion", "")], sort_keys=True)
             cache_key = scene_key + "_" + hashlib.sha256(identity.encode()).hexdigest()[:16]
 
@@ -572,6 +580,12 @@ class ShortsFactory:
                     footage_path = str(kb_clip)
                 except Exception as e:
                     logger.warning("Ken Burns animation failed for '{}': {}", footage_path, e)
+
+            if kit and kit.look.filters() and segment.asset_type in {"video", "photo", "image"}:
+                from app.services.branding.looks import render_look
+                footage_path = str(render_look(footage_path, kit.look, project_folder / "looks",
+                                               source_in=render_source_in, duration=seg_duration))
+                render_source_in, render_source_out = 0, seg_duration
 
             if segment.asset_type not in ("price_tag", "split_screen", "historical_archive", "data_card", "editorial_crop"):
                 if segment.overlay_text and segment.overlay_text.strip() and footage_path and Path(footage_path).exists():
