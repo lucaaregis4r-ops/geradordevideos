@@ -397,10 +397,12 @@ elif selected_project_id:
                                         with st.spinner("Substituindo mídia..."):
                                             target_path = cand.get("local_path")
                                             if not target_path or not Path(target_path).exists():
-                                                from app.services.media_ranker.candidate_builder import _generate_synthetic_clip
-                                                gen_p = Path(f"storage/media_cache/swap_{scene.scene_id}_{c_idx}.mp4")
-                                                _generate_synthetic_clip(cand.get("query", scene.narration), gen_p)
-                                                target_path = str(gen_p)
+                                                from app.services.media_ranker.media_searcher import MediaSearcher
+                                                from app.services.media_ranker.schemas import MediaCandidate
+                                                target_path = MediaSearcher()._download_candidate_asset(MediaCandidate.from_dict(cand))
+                                                if not target_path:
+                                                    st.error("Download falhou; escolha outro candidato.")
+                                                    st.stop()
 
                                             manager.swap_scene_media(
                                                 project_id=selected_project_id,
@@ -435,6 +437,61 @@ elif selected_project_id:
                             st.rerun()
 
         st.divider()
+        st.markdown("### Revisão por plano visual")
+        for scene in plan.scenes:
+            targets = scene.visual_beats or [scene]
+            for target in targets:
+                beat_id = getattr(target, "beat_id", None)
+                key = f"{scene.scene_id}_{beat_id or 'scene'}"
+                selected = target.selected_media or {}
+                with st.expander(f"{key} — {selected.get('semantic_status', 'pending_media')}"):
+                    st.write(scene.narration)
+                    st.write(target.intent)
+                    local = selected.get("local_path")
+                    if local and Path(local).is_file():
+                        if Path(local).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+                            st.image(local)
+                        else:
+                            st.video(local)
+                    st.caption(f"Origem: {selected.get('source_page', 'não informada')} | Intervalo: {selected.get('source_in', 0)}–{selected.get('source_out', 'fim')}")
+                    if beat_id:
+                        if target.media_candidates:
+                            choice = st.selectbox("Candidato", range(len(target.media_candidates)),
+                                format_func=lambda i: f"{target.media_candidates[i].get('provider', '')}: {target.media_candidates[i].get('description') or target.media_candidates[i].get('asset_id', '')}",
+                                key=f"candidate_{key}")
+                            if st.button("Trocar este plano", key=f"swap_beat_{key}"):
+                                from app.services.media_ranker.media_searcher import MediaSearcher
+                                from app.services.media_ranker.schemas import MediaCandidate
+                                candidate = target.media_candidates[choice]
+                                candidate_path = candidate.get("local_path")
+                                if not candidate_path or not Path(candidate_path).is_file():
+                                    candidate_path = MediaSearcher()._download_candidate_asset(MediaCandidate.from_dict(candidate))
+                                if candidate_path:
+                                    manager.swap_beat_media(selected_project_id, scene.scene_id, beat_id, candidate_path, candidate)
+                                    st.rerun()
+                                else:
+                                    st.error("Download falhou. A seleção anterior foi preservada.")
+                        uploaded = st.file_uploader("Importar mídia para este plano", type=["mp4", "mov", "webm", "png", "jpg"], key=f"upload_beat_{key}")
+                        if uploaded and st.button("Aplicar mídia importada", key=f"apply_beat_{key}"):
+                            import hashlib
+                            digest = hashlib.sha256(uploaded.getbuffer()).hexdigest()[:20]
+                            destination = Path("storage/media_cache") / f"import_{digest}{Path(uploaded.name).suffix.lower()}"
+                            destination.write_bytes(uploaded.getbuffer())
+                            manager.swap_beat_media(selected_project_id, scene.scene_id, beat_id, destination,
+                                {"asset_id":f"import_{digest}", "provider":"local", "rights_status":"rights_unknown",
+                                 "media_type":"image" if destination.suffix in {".png", ".jpg"} else "video"})
+                            st.rerun()
+                    reason = st.text_input("Motivo da avaliação", key=f"reason_{key}")
+                    if selected and st.button("Aprovar pertinência", key=f"approve_{key}"):
+                        manager.review_media(selected_project_id, scene.scene_id, beat_id, True, reason)
+                        st.rerun()
+                    if selected and st.button("Rejeitar pertinência", key=f"reject_{key}"):
+                        manager.review_media(selected_project_id, scene.scene_id, beat_id, False, reason)
+                        st.rerun()
+                    if beat_id and st.button("Refazer busca deste plano", key=f"search_{key}"):
+                        manager.search_media_for_beat(selected_project_id, scene.scene_id, beat_id)
+                        st.rerun()
+
         st.markdown("### 📜 Pacote de Direitos Autorais e Créditos")
         c_col1, c_col2 = st.columns(2)
         with c_col1:
@@ -475,9 +532,9 @@ elif selected_project_id:
                 st.caption(f"Arquivo: `{Path(latest_video).name}`")
                 with open(latest_video, "rb") as f:
                     st.download_button(
-                        "📥 Baixar Vídeo Masterizado (MP4)",
+                        "📥 Baixar Vídeo de Revisão (MP4)",
                         data=f,
-                        file_name=f"{selected_project_id}_final.mp4",
+                        file_name=f"{selected_project_id}_review.mp4",
                         mime="video/mp4",
                         type="primary",
                         use_container_width=True,
@@ -490,24 +547,14 @@ elif selected_project_id:
 
         with r_col2:
             st.markdown("#### ⚙️ Controle de Render")
-            enforce_qg = st.checkbox("Bloquear render se reprovado pelo Quality Gate", value=True)
-            allow_draft = st.checkbox("Permitir render de rascunho em caso de erro menor", value=False)
+            st.caption("A exportação exige aprovação do plano atual no Quality Gate.")
 
             if st.button("🔨 Renderizar Vídeo Completo Agora", type="primary", use_container_width=True):
                 with st.spinner("Sintetizando áudio EBU R128, gerando cards, compondo Ken Burns e renderizando vídeo..."):
                     from app.services.factory import ShortsFactory
                     factory = ShortsFactory()
-                    script_file = Path(f"storage/scripts/{selected_project_id}.md")
-                    script_text = script_file.read_text(encoding="utf-8") if script_file.exists() else " ".join(s.narration for s in plan.scenes)
-                    res = factory.produce_draft(
-                        script_id=selected_project_id,
-                        script_text=script_text,
-                        title=getattr(plan, "title", selected_project_id),
-                        channel=getattr(plan, "channel", "default"),
-                        brand_style=plan.brand_preset,
-                        enforce_quality_gate=enforce_qg,
-                        allow_unpassed_draft=allow_draft,
-                    )
+                    manager.evaluate_project_quality(selected_project_id)
+                    res = factory.render_existing_draft(selected_project_id)
                     if res.get("video_path"):
                         st.success("Render concluído com sucesso!")
                     else:

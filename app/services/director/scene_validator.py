@@ -81,25 +81,11 @@ def validate_scene_plan(
     norm_original = _normalize_for_comparison(clean_script_text)
 
     if strict_words:
-        # Compare word by word ignoring punctuation
-        words_combined = re.findall(r"\w+", norm_combined.lower())
-        words_original = re.findall(r"\w+", norm_original.lower())
-
-        if words_combined != words_original:
-            set_orig = set(words_original)
-            set_comb = set(words_combined)
-            overlap = len(set_comb.intersection(set_orig))
-            coverage = overlap / max(len(set_orig), 1)
-
-            # If coverage is below 70%, it indicates severe truncation or hallucination
-            if coverage < 0.70:
-                diff_sample = (
-                    f"Original words: {len(words_original)}, Plan words: {len(words_combined)}, "
-                    f"Coverage: {coverage:.0%}"
-                )
-                errors.append(
-                    f"Narration does not match approved script! ({diff_sample})"
-                )
+        # Whitespace between slices may differ; words, ordering, case and punctuation may not.
+        original = re.sub(r"\s+", " ", clean_script_text).strip()
+        combined = re.sub(r"\s+", " ", clean_combined_text).strip()
+        if combined != original:
+            errors.append("Narration does not match approved script literally")
 
     # 2. Scene structure check
     seen_ids = set()

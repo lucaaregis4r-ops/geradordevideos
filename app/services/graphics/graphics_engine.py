@@ -237,6 +237,7 @@ class GraphicsEngine:
             local_path=str(card_path),
             technical_score=1.0,
             semantic_score=0.98,
+            semantic_status="planned_graphic",
             final_score=0.99,
             source_page="Graphics Engine Programmatic Card",
         )

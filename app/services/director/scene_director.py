@@ -90,7 +90,7 @@ class LocalRuleDirectorProvider(DirectorProvider):
             n_phase = phases[phase_idx]
 
             # Infer narrative function and humor
-            is_joke = any(k in lower_s for k in ["nervoso", "petróleo", "caiu", "ridícula", "piada"])
+            is_joke = any(k in lower_s for k in ["piada", "ironia explícita"])
             if idx == 0:
                 n_func = "hook"
             elif idx == total_count - 1:
@@ -146,7 +146,7 @@ class LocalRuleDirectorProvider(DirectorProvider):
                 "café": "hot coffee pouring cup",
                 "loja": "clothing retail store interior",
                 "máquina": "industrial textile weaving machine",
-                "petróleo": "oil barrel falling on ground literal",
+                "petróleo": "oil refinery pipes",
             }
             primary_query = en_map.get(entity_main, f"{entity_main} retail closeup")
             
@@ -342,16 +342,8 @@ class GeminiDirectorProvider(DirectorProvider):
                         if isinstance(b_queries, str):
                             b_queries = [b_queries]
                         visual_beats.append(
-                            VisualBeat(
-                                beat_id=b_id,
-                                queries=b_queries,
-                                visual_type=b.get("visual_type", "stock_video"),
-                                component_type=b.get("component_type"),
-                                duration=float(b.get("duration", dur / max(1, len(visual_beats_raw)))),
-                                text_overlay=b.get("text_overlay"),
-                                text_level=b.get("text_level", "caption"),
-                                intent=b.get("intent", ""),
-                            )
+                            VisualBeat.from_dict({**b, "beat_id": b_id, "queries": b_queries,
+                                "duration": float(b.get("duration", dur / max(1, len(visual_beats_raw))))})
                         )
 
             scene = Scene(
@@ -439,6 +431,9 @@ class SceneDirector:
         settings = {"brand_preset": brand_preset}
         plan = self.provider.generate_plan(script_version, settings)
         plan.title = title
+        valid, errors = validate_scene_plan(plan, script_version.clean_narration)
+        if not valid:
+            raise ValueError(f"Scene plan validation failed: {'; '.join(errors)}")
 
         # 3. Save scenes.json
         if save_plan:

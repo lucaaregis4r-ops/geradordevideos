@@ -100,7 +100,8 @@ def test_media_candidate_schema_is_synthetic():
 
 def test_candidate_builder_marks_synthetic_and_low_score(tmp_path):
     """CandidateBuilder marks fallback clips as synthetic with honest low scores."""
-    builder = CandidateBuilder(media_cache_dir=tmp_path / "cache")
+    from app.services.media_sources.manager import MediaSourcesManager
+    builder = CandidateBuilder(media_cache_dir=tmp_path / "cache", sources_manager=MediaSourcesManager(providers=[]))
     # Search with synthetic fallback explicitly enabled
     results = builder.search_query(
         query="unlikely_query_string_xyz_123",
@@ -130,6 +131,7 @@ def test_media_searcher_retry_on_download_failure(tmp_path):
     cand1 = MediaCandidate(
         provider="pexels",
         asset_id="cand_fail",
+        semantic_score=0.9,
         query="query1",
         url="https://fail.com/video1.mp4",
         final_score=0.90,
@@ -137,6 +139,7 @@ def test_media_searcher_retry_on_download_failure(tmp_path):
     cand2 = MediaCandidate(
         provider="pexels",
         asset_id="cand_success",
+        semantic_score=0.9,
         query="query1",
         url="https://success.com/video2.mp4",
         final_score=0.85,
@@ -154,7 +157,10 @@ def test_media_searcher_retry_on_download_failure(tmp_path):
     with patch.object(searcher, "search_for_scene", return_value=[cand1, cand2]):
         # Mock material.save_video: fail on cand1, succeed on cand2
         fake_local_file = tmp_path / "cache" / "downloaded_video2.mp4"
-        fake_local_file.write_text("dummy video content")
+        import subprocess
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i",
+                        "testsrc2=size=720x1280:rate=10:duration=5", "-c:v", "libx264", "-preset", "ultrafast",
+                        str(fake_local_file)], check=True)
 
         def mock_save_video(video_url, save_dir):
             if "fail" in video_url:
@@ -203,7 +209,7 @@ def test_shorts_factory_halts_on_failed_quality_gate(tmp_path):
             )
             mock_direct.return_value = mock_plan
 
-            with patch("app.services.voice.tts"):
+            with patch("app.services.voice.tts"), patch("app.services.factory.master_voice_track"), patch.object(factory.searcher, "populate_scene_plan", return_value=mock_plan):
                 with patch("app.services.video_project.VideoProject.render") as mock_render:
                     result = factory.produce_draft(
                         script_id="test_rejection",

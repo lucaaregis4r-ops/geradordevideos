@@ -15,7 +15,7 @@ from loguru import logger
 
 from app.config import config
 from app.services.media_ranker.schemas import MediaCandidate
-from .base import MediaSourceProvider
+from .base import MediaSourceProvider, ProviderCapabilities
 
 
 def _strip_html(text: str) -> str:
@@ -27,6 +27,7 @@ def _strip_html(text: str) -> str:
 
 
 class WikimediaCommonsProvider(MediaSourceProvider):
+    capabilities = ProviderCapabilities(("image", "video"))
     @property
     def name(self) -> str:
         return "wikimedia_commons"
@@ -50,7 +51,7 @@ class WikimediaCommonsProvider(MediaSourceProvider):
         params = {
             "action": "query",
             "generator": "search",
-            "gsrsearch": f"{query} filetype:bitmap",
+            "gsrsearch": f"{query} filetype:{'video' if media_type == 'video' else 'bitmap'}",
             "gsrnamespace": 6,  # File namespace
             "gsrlimit": min(limit, 20),
             "prop": "imageinfo",
@@ -58,6 +59,10 @@ class WikimediaCommonsProvider(MediaSourceProvider):
             "format": "json",
         }
 
+        if media_type == "video":
+            params["prop"] = "videoinfo"
+            params.pop("iiprop")
+            params["viprop"] = "url|size|mime|extmetadata|derivatives"
         url = f"https://commons.wikimedia.org/w/api.php?{urllib.parse.urlencode(params)}"
         logger.info("Searching Wikimedia Commons: query='{}'", query)
 
@@ -68,12 +73,7 @@ class WikimediaCommonsProvider(MediaSourceProvider):
                 proxies=config.proxy,
                 timeout=(10, 30),
             )
-            if resp.status_code != 200:
-                logger.warning(
-                    "Wikimedia Commons search returned status {}: {}",
-                    resp.status_code, resp.text[:200]
-                )
-                return []
+            resp.raise_for_status()
 
             data = resp.json()
             pages = (data.get("query") or {}).get("pages") or {}
@@ -83,27 +83,33 @@ class WikimediaCommonsProvider(MediaSourceProvider):
                 if not isinstance(page_info, dict):
                     continue
 
-                imageinfo_list = page_info.get("imageinfo", [])
+                imageinfo_list = page_info.get("videoinfo" if media_type == "video" else "imageinfo", [])
                 if not imageinfo_list or not isinstance(imageinfo_list[0], dict):
                     continue
 
                 info = imageinfo_list[0]
                 mime = info.get("mime", "")
-                if not mime.startswith("image/"):
+                if not mime.startswith(f"{media_type}/"):
                     continue
 
                 download_url = info.get("url", "")
                 if not download_url:
                     continue
 
-                width = int(info.get("width", 1080))
-                height = int(info.get("height", 1920))
+                if media_type == "video":
+                    variants = [v for v in info.get("derivatives", []) if v.get("src") and str(v.get("type", "")).startswith("video/")]
+                    if variants:
+                        best = max(variants, key=lambda v: int(v.get("width", 0)) * int(v.get("height", 0)))
+                        download_url = best["src"]
+                        info = {**info, "width": best.get("width", info.get("width", 0)), "height": best.get("height", info.get("height", 0))}
+                width = int(info.get("width", 0))
+                height = int(info.get("height", 0))
                 source_page = info.get("descriptionurl", "")
 
                 extmetadata = info.get("extmetadata", {})
                 artist_raw = extmetadata.get("Artist", {}).get("value", "")
                 artist = _strip_html(artist_raw) or "Wikimedia Commons contributor"
-                license_name = extmetadata.get("LicenseShortName", {}).get("value", "Public Domain / CC")
+                license_name = extmetadata.get("LicenseShortName", {}).get("value", "")
                 license_url = extmetadata.get("LicenseUrl", {}).get("value", "https://commons.wikimedia.org/wiki/Commons:Reusing_content_outside_Wikimedia")
 
                 candidates.append(
@@ -112,13 +118,14 @@ class WikimediaCommonsProvider(MediaSourceProvider):
                         provider_asset_id=str(page_id),
                         asset_id=f"commons_{page_id}",
                         query=query,
+                        description=_strip_html(extmetadata.get("ImageDescription", {}).get("value", "")),
                         width=width,
                         height=height,
                         duration=0.0,
                         url=download_url,
                         thumbnail=download_url,
                         source_page=source_page,
-                        media_type="image",
+                        media_type=media_type,
                         creator_name=artist,
                         creator_url=source_page,
                         license_id=license_name,
@@ -130,6 +137,5 @@ class WikimediaCommonsProvider(MediaSourceProvider):
 
             return candidates
 
-        except Exception as e:
-            logger.warning("Wikimedia Commons search failed for query='{}': {}", query, e)
-            return []
+        except Exception:
+            raise

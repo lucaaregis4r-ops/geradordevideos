@@ -75,6 +75,7 @@ class SmartLibrary:
         intent: str = "",
         asset_id: Optional[str] = None,
         duration: float = 5.0,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> LibraryAsset:
         """Indexes an approved media clip into the smart library."""
         src_file = Path(media_path).resolve()
@@ -113,6 +114,11 @@ class SmartLibrary:
             )
             self._assets[aid] = asset
 
+        from .asset_catalog import _measure_media
+        asset.width, asset.height, measured = _measure_media(dest_file)
+        asset.duration = measured or duration
+        if metadata:
+            asset.metadata.update(metadata)
         self._save_catalog()
         return asset
 
@@ -129,7 +135,7 @@ class SmartLibrary:
 
         matched: List[MediaCandidate] = []
         for asset in self._assets.values():
-            if not Path(asset.local_path).exists():
+            if not asset.approved or asset.metadata.get("rights_status") == "blocked_for_this_use" or not Path(asset.local_path).exists():
                 continue
 
             asset_tokens = set(asset.tags) | set(re.findall(r"\w+", asset.intent.lower()))
@@ -142,6 +148,13 @@ class SmartLibrary:
                             provider="smart_library",
                             asset_id=asset.asset_id,
                             query=query,
+                            description=asset.intent, tags=list(asset.tags),
+                            source_page=asset.metadata.get("source_page", ""),
+                            creator_name=asset.metadata.get("creator_name", ""),
+                            license_id=asset.metadata.get("license_id", ""),
+                            license_url=asset.metadata.get("license_url", ""),
+                            rights_status=asset.metadata.get("rights_status", "rights_unknown"),
+                            media_type="image" if Path(asset.local_path).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"} else "video",
                             width=asset.width,
                             height=asset.height,
                             duration=asset.duration,

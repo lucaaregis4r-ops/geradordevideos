@@ -46,12 +46,12 @@ class CreditsGenerator:
             seen_assets.add(asset_id)
 
             # Query catalog or metadata from item
-            info = self.catalog.get_asset(asset_id) or {}
+            info = {**(self.catalog.get_asset(asset_id) or {}), **getattr(item, "provenance", {})}
             provider = info.get("provider") or getattr(item, "asset_type", "unknown")
             creator = info.get("creator_name") or "Unknown Creator"
             creator_url = info.get("creator_url") or ""
             source_page = info.get("source_page") or ""
-            license_id = info.get("license_id") or "Standard Rights"
+            license_id = info.get("license_id") or "rights_unknown"
             license_url = info.get("license_url") or ""
             content_hash = info.get("content_hash") or ""
 
@@ -65,6 +65,7 @@ class CreditsGenerator:
                     "license_id": license_id,
                     "license_url": license_url,
                     "content_hash": content_hash,
+                    "rights_status": info.get("rights_status", "rights_unknown"),
                 }
             )
 
@@ -74,6 +75,10 @@ class CreditsGenerator:
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "total_assets": len(assets_used),
             "assets": assets_used,
+            "usage": [{"segment_id": s.segment_id, "asset_id": s.asset_id,
+                       "source_in": s.source_in, "source_out": s.source_out,
+                       "crop_mode": s.crop_mode, "semantic_status": s.semantic_status}
+                      for s in getattr(plan, "segments", [])],
         }
 
     def generate_markdown(self, manifest: Dict[str, Any]) -> str:

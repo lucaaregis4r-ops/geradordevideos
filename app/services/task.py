@@ -1548,8 +1548,8 @@ def _run_editorial_pipeline(task_id: str, params: VideoParams, stop_at: str = "v
         )
 
         final_video = draft.get("video_path")
-        if not final_video or not Path(final_video).exists():
-            return _mark_task_failed(task_id, "video", "ShortsFactory did not produce output video")
+        if not final_video or not Path(final_video).exists() or draft.get("status") != "succeeded":
+            return _mark_task_failed(task_id, "video", draft.get("error") or f"ShortsFactory: {draft.get('status')}")
 
         # Synchronize editorial artifacts into task directory for API/UI access
         import shutil
@@ -1560,7 +1560,7 @@ def _run_editorial_pipeline(task_id: str, params: VideoParams, stop_at: str = "v
             if src and Path(src).exists():
                 shutil.copy2(src, task_dir_path / Path(src).name)
 
-        plan_src = draft.get("plan_path")
+        plan_src = draft.get("assembly_plan_path")
         if plan_src and Path(plan_src).exists():
             shutil.copy2(plan_src, task_dir_path / "assembly_plan.json")
 

@@ -11,7 +11,7 @@ before any video is rendered.
 
 from __future__ import annotations
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from app.services.director.schemas import Scene, ScenePlan
 from app.services.media_ranker.deduplicator import MediaDeduplicator
@@ -40,7 +40,7 @@ class AssemblyPlanner:
         current_time = 0.0
 
         for scene in scene_plan.scenes:
-            if getattr(scene, "has_multiple_beats", False) and scene.visual_beats:
+            if scene.visual_beats:
                 beat_segments = self._scene_beats_to_segments(scene, current_time)
                 segments.extend(beat_segments)
                 if beat_segments:
@@ -92,15 +92,15 @@ class AssemblyPlanner:
             )
 
         query = media.get("query", scene.queries[0] if scene.queries else "")
-        semantic_score = float(media.get("semantic_score", media.get("final_score", 0.0)))
+        semantic_score = float(media.get("semantic_score", 0.0))
         thumbnail = media.get("thumbnail", "")
         phase = getattr(scene, "narrative_phase", "")
         is_synthetic = bool(media.get("is_synthetic", False))
 
         return AssemblySegment(
             segment_id=f"seg_{scene.scene_id}",
-            start=round(start_time, 2),
-            end=round(end_time, 2),
+            start=start_time,
+            end=end_time,
             asset_id=asset_id,
             asset_type=asset_type,
             asset_path=asset_path,
@@ -116,6 +116,10 @@ class AssemblyPlanner:
             thumbnail=thumbnail,
             phase=phase,
             is_synthetic=is_synthetic,
+                    source_in=float(media.get("source_in", 0)), source_out=media.get("source_out"),
+                    crop_mode=media.get("crop_mode", "center"), semantic_status=media.get("semantic_status", "unverified"),
+                    material_kind=media.get("media_type", "video"),
+                    provenance={key: media.get(key, "") for key in ("provider", "provider_asset_id", "creator_name", "creator_url", "source_page", "license_id", "license_url", "rights_status", "review_reason")},
         )
 
     def _scene_beats_to_segments(self, scene: Scene, start_time: float) -> list[AssemblySegment]:
@@ -130,14 +134,14 @@ class AssemblyPlanner:
         for i, beat in enumerate(beats):
             is_last = (i == len(beats) - 1)
             if is_last:
-                beat_duration = max(0.5, round((start_time + scene_duration) - current_beat_start, 2))
+                beat_duration = (start_time + scene_duration) - current_beat_start
             else:
                 raw_dur = (beat.duration / total_beat_hint) * scene_duration
-                beat_duration = max(0.5, round(raw_dur, 2))
+                beat_duration = raw_dur
 
-            beat_end = round(current_beat_start + beat_duration, 2)
+            beat_end = current_beat_start + beat_duration
 
-            media = beat.selected_media or scene.selected_media or {}
+            media = beat.selected_media or {}
             asset_id = media.get("asset_id", media.get("url", f"missing_{beat.beat_id}"))
             asset_path = media.get("local_path", media.get("url", ""))
             asset_type = self._resolve_beat_asset_type(beat, scene, media)
@@ -157,7 +161,7 @@ class AssemblyPlanner:
                 )
 
             query = media.get("query", beat.queries[0] if beat.queries else (scene.queries[0] if scene.queries else ""))
-            semantic_score = float(media.get("semantic_score", media.get("final_score", 0.0)))
+            semantic_score = float(media.get("semantic_score", 0.0))
             thumbnail = media.get("thumbnail", "")
             phase = getattr(scene, "narrative_phase", "")
             is_synthetic = bool(media.get("is_synthetic", False))
@@ -168,7 +172,7 @@ class AssemblyPlanner:
             segments.append(
                 AssemblySegment(
                     segment_id=f"seg_{beat.beat_id}",
-                    start=round(current_beat_start, 2),
+                    start=current_beat_start,
                     end=beat_end,
                     asset_id=asset_id,
                     asset_type=asset_type,
@@ -185,6 +189,10 @@ class AssemblyPlanner:
                     thumbnail=thumbnail,
                     phase=phase,
                     is_synthetic=is_synthetic,
+                    source_in=float(media.get("source_in", 0)), source_out=media.get("source_out"),
+                    crop_mode=media.get("crop_mode", "center"), semantic_status=media.get("semantic_status", "unverified"),
+                    material_kind=media.get("media_type", "video"),
+                    provenance={key: media.get(key, "") for key in ("provider", "provider_asset_id", "creator_name", "creator_url", "source_page", "license_id", "license_url", "rights_status", "review_reason")},
                 )
             )
             current_beat_start = beat_end
@@ -193,23 +201,11 @@ class AssemblyPlanner:
 
     def _resolve_beat_asset_type(self, beat: Any, scene: Scene, media: dict) -> str:
         """Determines asset type for a visual beat."""
-        if beat.component_type:
-            return beat.component_type
-        if media.get("type"):
-            return media["type"]
-        vt = (beat.visual_type or scene.visual_type).lower()
-        if vt == "component":
-            return beat.component_type or "graphic"
-        return self._resolve_asset_type(scene, media)
+        from dataclasses import replace
+        return self._resolve_asset_type(replace(scene, visual_type=beat.visual_type), media)
 
     def _compute_duration(self, scene: Scene) -> float:
         """Determines segment duration based on narrative function and content."""
-        # Humor: keep it short (≤ 1.5s)
-        if scene.humor or scene.narrative_function == "joke":
-            if scene.start is not None and scene.end is not None and scene.end > scene.start:
-                return min(float(scene.end - scene.start), 1.5)
-            return min(scene.duration_hint, 1.5)
-
         # Audio-measured duration takes priority if available
         overlay = scene.overlay or {}
         audio_duration = overlay.get("audio_duration")
@@ -219,6 +215,9 @@ class AssemblyPlanner:
         # Pre-timed scene from director
         if scene.start is not None and scene.end is not None and scene.end > scene.start:
             return float(scene.end - scene.start)
+
+        if scene.humor or scene.narrative_function == "joke":
+            return min(scene.duration_hint, 1.5)
 
         # Title/transition: brief
         if scene.narrative_function in ("transition",):
@@ -234,8 +233,15 @@ class AssemblyPlanner:
     def _resolve_asset_type(self, scene: Scene, media: dict) -> str:
         """Determines the asset type from scene metadata and media info."""
         # If media has an explicit type, use it
-        if media.get("type"):
-            return media["type"]
+        explicit_type = media.get("type")
+        if explicit_type in {"video", "photo", "graphic", "text_card", "gif", "screenshot", "meme"}:
+            return explicit_type
+        if explicit_type in {"stock_video", "stock_image"}:
+            return "video" if explicit_type == "stock_video" else "photo"
+        if media.get("media_type") == "image":
+            return "photo"
+        if media.get("media_type") == "video":
+            return "video"
         # Map visual_type to asset_type
         vt = scene.visual_type.lower()
         mapping = {

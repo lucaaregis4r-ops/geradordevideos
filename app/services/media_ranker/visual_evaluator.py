@@ -131,6 +131,7 @@ class VisualEvaluator:
         media_type: str = "video",
         duration: float = 0.0,
         sample_count: int = 3,
+        source_in: float = 0.0,
     ) -> VisualMetrics:
         """Performs multi-frame visual evaluation on a media asset.
 
@@ -189,7 +190,7 @@ class VisualEvaluator:
                 timestamps = [round(0.2 * (i + 1), 2) for i in range(count)]
 
             for ts in timestamps:
-                img = self.extract_video_frame(path, ts)
+                img = self.extract_video_frame(path, source_in + ts)
                 if img is not None:
                     frames.append(_compute_frame_stats(img, timestamp=ts))
 
