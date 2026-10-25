@@ -1944,12 +1944,13 @@ def gemini_tts(
 
         # google-genai 使用统一 Client 调用文本和 TTS 模型。上下文管理器确保
         # 请求结束后释放 HTTP 连接，同时保留原有 PCM 转码和字幕时间轴逻辑。
+        from app.services.audio.provider_retry import generate_with_quota_retry
         with genai.Client(api_key=api_key) as client:
-            response = client.models.generate_content(
+            response = generate_with_quota_retry(lambda: client.models.generate_content(
                 model="gemini-2.5-flash-preview-tts",
                 contents=text,
                 config=generation_config,
-            )
+            ))
 
         # 检查响应
         if not response.candidates or not response.candidates[0].content:
@@ -2026,6 +2027,9 @@ def gemini_tts(
         logger.error(f"Missing required package for Gemini TTS: {str(e)}. Please install: pip install pydub")
         return None
     except Exception as e:
+        from app.services.audio.provider_retry import VoiceQuotaError
+        if isinstance(e, VoiceQuotaError):
+            raise
         logger.error(f"Gemini TTS failed, error: {str(e)}")
         return None
 

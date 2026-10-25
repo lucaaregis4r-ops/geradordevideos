@@ -149,12 +149,27 @@ class ShortsFactory:
             audio_path = audio_dir / f"{scene.scene_id}.mp3"
             # Apply pronunciation engine to translate formulas/acronyms for the TTS
             spoken_text = self.pronunciation_engine.to_spoken(scene.narration)
-            voice.tts(
-                text=spoken_text,
-                voice_name=chosen_voice,
-                voice_rate=kit.voice_rate if kit else 1.0,
-                voice_file=str(audio_path),
+            from app.services.audio.provider_retry import retry_progress
+            token = retry_progress.set(
+                (lambda message: on_progress(f"{scene.scene_id}: {message}", voice_pct))
+                if on_progress else None
             )
+            try:
+                voice.tts(
+                    text=spoken_text,
+                    voice_name=chosen_voice,
+                    voice_rate=kit.voice_rate if kit else 1.0,
+                    voice_file=str(audio_path),
+                )
+            except Exception as exc:
+                raise RuntimeError(f"Falha ao gerar voz de {scene.scene_id}: {exc}") from exc
+            finally:
+                retry_progress.reset(token)
+            if not audio_path.is_file() or audio_path.stat().st_size == 0:
+                raise RuntimeError(
+                    f"O provedor de voz não gerou áudio para {scene.scene_id}. "
+                    "Confira a configuração e a disponibilidade do serviço de TTS."
+                )
             # Master the voice track to EBU R128 (-14.0 LUFS) with high-pass and compressor
             mastered_path = audio_dir / f"{scene.scene_id}_mastered.mp3"
             try:
