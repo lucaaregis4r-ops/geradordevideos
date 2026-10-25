@@ -73,6 +73,15 @@ class ReviewManager:
             "total_scenes": len(plan.scenes),
         }
 
+    def recover_pending_media(self, project_id: str, limit: int = 3, on_progress=None) -> dict:
+        from app.services.review.recovery import recover_pending
+        from app.services.media_ranker.media_searcher import MediaSearcher
+        report = recover_pending(self.projects_dir / project_id / "scenes.json",
+                                 MediaSearcher(media_cache_dir=self.media_cache_dir),
+                                 limit=limit, progress=on_progress)
+        self.evaluate_project_quality(project_id)
+        return report
+
     def swap_scene_media(
         self,
         project_id: str,

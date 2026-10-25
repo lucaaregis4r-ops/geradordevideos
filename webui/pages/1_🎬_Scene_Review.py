@@ -443,6 +443,30 @@ elif selected_project_id:
                             st.rerun()
 
         st.divider()
+        st.markdown("### Recuperar cenas pendentes")
+        from app.services.review.recovery import diagnosis
+        diagnostic_rows = diagnosis(plan)
+        state_labels = {"missing": "Sem arquivo de mídia", "rejected": "Mídia rejeitada",
+                        "placeholder": "Imagem provisória", "review": "Precisa de revisão humana", "ready": "Revisada"}
+        pending_rows = [r for r in diagnostic_rows if r["state"] in {"missing", "rejected", "placeholder"}]
+        st.caption("A busca abaixo trata apenas mídias ausentes, rejeitadas ou provisórias. Áudio, narração e seleções existentes são preservados.")
+        st.dataframe([{"Cena": r["scene"], "Plano": r["beat"] or "cena", "Situação": state_labels[r["state"]],
+                       "Candidatos": r["candidates"], "Rejeições": str(r["rejections"])} for r in diagnostic_rows], hide_index=True)
+        recovery_limit = st.number_input("Planos por rodada", min_value=1, max_value=20, value=3)
+        if st.button(f"Pesquisar pendências ({len(pending_rows)})", disabled=not pending_rows):
+            recovery_progress = st.progress(0.0)
+            try:
+                report = manager.recover_pending_media(selected_project_id, limit=int(recovery_limit),
+                    on_progress=lambda message, fraction: recovery_progress.progress(fraction, text=message))
+                st.session_state[f"recovery_{selected_project_id}"] = report["results"]
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Busca interrompida ({type(exc).__name__}). Os planos concluídos foram salvos; recarregue para continuar.")
+        last_recovery = st.session_state.get(f"recovery_{selected_project_id}")
+        if last_recovery:
+            st.write("Última rodada")
+            st.dataframe(last_recovery, hide_index=True)
+
         st.markdown("### Revisão por plano visual")
         from app.services.assembly.planner import AssemblyPlanner
         from app.services.assembly.media_mix import summarize_media_mix
@@ -460,6 +484,25 @@ elif selected_project_id:
                 with st.expander(f"{key} — {selected.get('semantic_status', 'pending_media')}"):
                     st.write(scene.narration)
                     st.write(target.intent)
+                    query_text = st.text_area("Buscas concretas em inglês — uma por linha", value="\n".join(target.queries), key=f"queries_recovery_{key}")
+                    if st.button("Salvar buscas deste plano", key=f"save_queries_recovery_{key}"):
+                        import re
+                        queries = list(dict.fromkeys(q.strip() for q in query_text.splitlines() if q.strip()))
+                        if not 1 <= len(queries) <= 5 or any(re.search(r"\b(economy|market|wealth|value|capitalism|supply chain)\b", q, re.I) for q in queries):
+                            st.error("Use de uma a cinco buscas de objetos e ações físicas, evitando termos abstratos.")
+                        else:
+                            if beat_id:
+                                manager.update_beat_metadata(selected_project_id, scene.scene_id, beat_id, queries=queries)
+                            else:
+                                manager.update_scene_metadata(selected_project_id, scene.scene_id, queries=queries)
+                            st.rerun()
+                    rejected_candidates = [{"Fonte": c.get("provider"), "Descrição": c.get("description", ""),
+                                            "Relevância": c.get("semantic_score", 0),
+                                            "Situação": "Rejeitado / requer revisão" if c.get("error_detail") else c.get("semantic_status", "não verificado")}
+                                           for c in target.media_candidates]
+                    if rejected_candidates:
+                        st.dataframe(rejected_candidates, hide_index=True)
+
                     attempts = getattr(target, "search_attempts", [])
                     if attempts:
                         with st.expander("Resultados por fonte"):
