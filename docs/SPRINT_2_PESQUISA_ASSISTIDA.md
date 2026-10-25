@@ -24,3 +24,7 @@ Seis testes offline passaram e cobrem preservação da narração, áudio, cenas
 Ainda pendentes do sprint: acervo curado ampliado, benchmark humano de 30 cenas, sugestões assistidas de novas consultas e comparação visual de candidatos lado a lado. A rodada não garante encontrar uma mídia para toda ação específica. As rotas antigas de refazer a busca de todas as cenas continuam disponíveis e têm escopo diferente desta recuperação seletiva.
 
 A tela de recuperação e os campos de consulta também foram verificados com Streamlit AppTest. O diagnóstico foi executado em modo somente leitura sobre o projeto de 79 segundos, identificando cenas 10 e 13 sem mídia e cinco rejeições por relevância em cada uma.
+
+## Continuação em 25/10/2026
+
+Sugestões de consultas, comparação lado a lado, cadastro no acervo e laboratório de 30 casos foram entregues na [continuação de pesquisa assistida](SPRINT_PESQUISA_COMPARACAO_ACERVO.md). A avaliação humana dos casos e a ampliação substancial do acervo ainda dependem de curadoria.

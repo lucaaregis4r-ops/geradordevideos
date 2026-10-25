@@ -8,6 +8,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import json
+import hashlib
+import uuid
 from pathlib import Path
 import re
 import shutil
@@ -65,8 +67,12 @@ class SmartLibrary:
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "assets": [a.to_dict() for a in self._assets.values()],
         }
-        with self.catalog_path.open("w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2)
+        temporary = self.catalog_path.with_name(f"catalog.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary.replace(self.catalog_path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def register_approved_asset(
         self,
@@ -83,7 +89,7 @@ class SmartLibrary:
             raise FileNotFoundError(f"Source media '{media_path}' not found")
 
         aid = asset_id or src_file.stem
-        dest_file = self.library_dir / f"{aid}{src_file.suffix}"
+        dest_file = self.library_dir / f"library_{hashlib.sha256(aid.encode()).hexdigest()[:24]}{src_file.suffix}"
 
         # Copy to managed library folder if not already inside it
         if src_file != dest_file:
@@ -94,6 +100,9 @@ class SmartLibrary:
 
         existing = self._assets.get(aid)
         if existing:
+            existing.local_path = str(dest_file)
+            existing.filename = dest_file.name
+            existing.intent = intent or existing.intent
             existing.use_count += 1
             existing.last_used = now_iso
             for t in normalized_tags:
@@ -138,7 +147,7 @@ class SmartLibrary:
             if not asset.approved or asset.metadata.get("rights_status") == "blocked_for_this_use" or not Path(asset.local_path).exists():
                 continue
 
-            asset_tokens = set(asset.tags) | set(re.findall(r"\w+", asset.intent.lower()))
+            asset_tokens = set(re.findall(r"\w+", " ".join(asset.tags).lower())) | set(re.findall(r"\w+", asset.intent.lower()))
             overlap = tokens.intersection(asset_tokens)
             if overlap:
                 ratio = len(overlap) / len(tokens)
@@ -151,6 +160,7 @@ class SmartLibrary:
                             description=asset.intent, tags=list(asset.tags),
                             source_page=asset.metadata.get("source_page", ""),
                             creator_name=asset.metadata.get("creator_name", ""),
+                            perceptual_hash=asset.metadata.get("perceptual_hash", ""),
                             license_id=asset.metadata.get("license_id", ""),
                             license_url=asset.metadata.get("license_url", ""),
                             rights_status=asset.metadata.get("rights_status", "rights_unknown"),

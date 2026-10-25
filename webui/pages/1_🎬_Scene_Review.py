@@ -484,6 +484,23 @@ elif selected_project_id:
                 with st.expander(f"{key} — {selected.get('semantic_status', 'pending_media')}"):
                     st.write(scene.narration)
                     st.write(target.intent)
+                    from app.services.review.search_assistant import suggest_queries
+                    suggestions = suggest_queries(target.queries, getattr(target, "forbidden_elements", []))
+                    if suggestions:
+                        with st.expander("Sugestões de buscas — confira antes de aplicar"):
+                            st.dataframe(suggestions, hide_index=True)
+                            suggested = st.multiselect("Variações para acrescentar", [r["query"] for r in suggestions], key=f"suggestions_{key}")
+                            if st.button("Aplicar variações escolhidas", key=f"apply_suggestions_{key}"):
+                                combined = list(dict.fromkeys([*target.queries, *suggested]))
+                                if len(combined) > 5:
+                                    st.warning("O limite é de cinco buscas. Remova uma consulta existente no campo abaixo antes de acrescentar outras.")
+                                elif suggested:
+                                    if beat_id:
+                                        manager.update_beat_metadata(selected_project_id, scene.scene_id, beat_id, queries=combined)
+                                    else:
+                                        manager.update_scene_metadata(selected_project_id, scene.scene_id, queries=combined)
+                                    st.session_state.pop(f"queries_recovery_{key}", None)
+                                    st.rerun()
                     query_text = st.text_area("Buscas concretas em inglês — uma por linha", value="\n".join(target.queries), key=f"queries_recovery_{key}")
                     if st.button("Salvar buscas deste plano", key=f"save_queries_recovery_{key}"):
                         import re
@@ -520,6 +537,46 @@ elif selected_project_id:
                         else:
                             st.video(local)
                     st.caption(f"Origem: {selected.get('source_page', 'não informada')} | Intervalo: {selected.get('source_in', 0)}–{selected.get('source_out', 'fim')}")
+                    if target.media_candidates:
+                        with st.expander("Comparar dois candidatos lado a lado"):
+                            pair = st.multiselect("Escolha até dois candidatos", list(range(len(target.media_candidates))),
+                                max_selections=2, format_func=lambda i: f"{i+1} · {target.media_candidates[i].get('provider', '')} · {target.media_candidates[i].get('description') or target.media_candidates[i].get('asset_id', '')}", key=f"compare_{key}")
+                            if pair:
+                                for column, candidate_index in zip(st.columns(len(pair)), pair):
+                                    with column:
+                                        candidate = target.media_candidates[candidate_index]
+                                        st.caption(candidate.get("description") or "Sem descrição do provedor")
+                                        st.write(f"Fonte: {candidate.get('provider', '')} · Licença: {candidate.get('license_id') or 'não informada'}")
+                                        preview_key = f"candidate_preview_{selected_project_id}_{key}_{candidate.get('asset_id', '')}_{candidate_index}"
+                                        preview_path = st.session_state.get(preview_key) or candidate.get("local_path")
+                                        if preview_path and Path(preview_path).is_file():
+                                            if Path(preview_path).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+                                                st.image(preview_path)
+                                            else:
+                                                st.video(preview_path, start_time=float(candidate.get("source_in") or 0))
+                                        elif st.button("Carregar mídia para comparar", key=f"load_{preview_key}"):
+                                            try:
+                                                from app.services.media_ranker.media_searcher import MediaSearcher
+                                                from app.services.media_ranker.schemas import MediaCandidate
+                                                downloaded = MediaSearcher()._download_candidate_asset(MediaCandidate.from_dict(candidate))
+                                                if downloaded and Path(downloaded).is_file():
+                                                    st.session_state[preview_key] = downloaded
+                                                    st.rerun()
+                                                st.error("A fonte não forneceu um arquivo disponível.")
+                                            except Exception as exc:
+                                                st.error(f"Falha ao carregar ({type(exc).__name__}). A seleção da cena não foi alterada.")
+                                st.caption("Comparar não troca nem aprova a mídia. Use a seleção abaixo após assistir.")
+                    if selected.get("semantic_status") in {"reviewed", "visual_verified"}:
+                        with st.expander("Guardar mídia aprovada no acervo"):
+                            observed = st.text_input("O que aparece de fato na mídia", value=selected.get("description", ""), key=f"observed_{key}")
+                            observed_tags = st.text_input("Etiquetas visuais em inglês, separadas por vírgula", key=f"observed_tags_{key}")
+                            if st.button("Adicionar ao acervo reutilizável", key=f"curate_{key}"):
+                                from app.services.review.curation import curate_asset
+                                try:
+                                    curate_asset(selected, observed, observed_tags.split(","), manager.media_cache_dir)
+                                    st.success("Mídia adicionada. Ela poderá aparecer nas buscas de outras produções, com nova avaliação de pertinência.")
+                                except ValueError as exc:
+                                    st.error(str(exc))
                     if beat_id:
                         if target.media_candidates:
                             choice = st.selectbox("Candidato", range(len(target.media_candidates)),
