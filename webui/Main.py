@@ -8528,7 +8528,11 @@ def _render_fabrica_de_bermudas_tab():
                 st.error(f"Erro durante a produção: {e}")
                 logger.exception("Erro ao produzir draft na Fábrica de Bermudas")
 
+    st.page_link("pages/6_⏳_Producoes_Salvas.py", label="Produções salvas e retomadas automáticas", icon="⏳")
     draft = st.session_state.get("latest_bermudas_draft")
+    if draft and draft.get("status") == "waiting_quota":
+        st.info(draft["error"] + " Acompanhe em Produções salvas.")
+        return
     if draft:
         st.divider()
         st.markdown("### 📹 Resultado da Produção Recente")

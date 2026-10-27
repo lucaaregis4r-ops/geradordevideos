@@ -73,7 +73,6 @@ def test_quota_error_reaches_factory_caller(tmp_path, monkeypatch):
 
 
 def test_factory_does_not_master_missing_synthesis(tmp_path, monkeypatch):
-    from types import SimpleNamespace
     from app.services import factory as module
 
     factory = module.ShortsFactory.__new__(module.ShortsFactory)
@@ -81,9 +80,9 @@ def test_factory_does_not_master_missing_synthesis(tmp_path, monkeypatch):
     factory.projects_dir = tmp_path
     factory.searcher = Mock()
     factory.director = Mock()
-    factory.director.direct_script.return_value = SimpleNamespace(scenes=[
-        SimpleNamespace(scene_id='scene_005', narration='Café.')
-    ])
+    from app.services.director.schemas import Scene, ScenePlan
+    factory.director.direct_script.return_value = ScenePlan(
+        'test', 'v1', 'hash', 1, 2, [Scene('scene_005', 'Café.', 'café', ['coffee cup'])])
     factory.pronunciation_engine = Mock()
     factory.pronunciation_engine.to_spoken.return_value = 'Café.'
     monkeypatch.setattr(module.voice, 'tts', Mock(return_value=None))

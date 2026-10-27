@@ -47,6 +47,9 @@ def _measure_audio_duration(path: Path | str) -> float:
         return 0.0
 
 
+from app.services.production.resume import durable_production, audio_signature, audio_cached, remember_audio, write_json
+
+
 class ShortsFactory:
     """Master orchestrator for the Shorts Factory."""
 
@@ -81,6 +84,7 @@ class ShortsFactory:
         self.credits_generator = CreditsGenerator(catalog=self.searcher.asset_catalog)
         self.voice_name = voice_name
 
+    @durable_production
     def produce_draft(
         self,
         script_id: str,
@@ -127,14 +131,19 @@ class ShortsFactory:
         # 1. Direct Script (Saves script_v00X and generates ScenePlan)
         if on_progress:
             on_progress("Directing script into visual scenes...", 0.20)
-        plan = self.director.direct_script(
-            script_id=script_id,
-            script_text=script_text,
-            title=title,
-            channel=channel,
-            brand_preset=brand_style,
-            output_dir=project_folder,
-        )
+        checkpoint = project_folder / "voice_plan.json"
+        if checkpoint.exists():
+            plan = ScenePlan.from_dict(json.loads(checkpoint.read_text()))
+        else:
+            plan = self.director.direct_script(
+                script_id=script_id,
+                script_text=script_text,
+                title=title,
+                channel=channel,
+                brand_preset=brand_style,
+                output_dir=project_folder,
+            )
+            write_json(checkpoint, plan.to_dict())
 
         # 2. Voice Synthesis for each scene
         audio_dir = project_folder / "audio"
@@ -150,26 +159,34 @@ class ShortsFactory:
             # Apply pronunciation engine to translate formulas/acronyms for the TTS
             spoken_text = self.pronunciation_engine.to_spoken(scene.narration)
             from app.services.audio.provider_retry import retry_progress
-            token = retry_progress.set(
-                (lambda message: on_progress(f"{scene.scene_id}: {message}", voice_pct))
-                if on_progress else None
-            )
-            try:
-                voice.tts(
-                    text=spoken_text,
-                    voice_name=chosen_voice,
-                    voice_rate=kit.voice_rate if kit else 1.0,
-                    voice_file=str(audio_path),
+            signature = audio_signature(spoken_text, chosen_voice, kit.voice_rate if kit else 1.0)
+            if not audio_cached(audio_path, signature):
+                # Never allow a previous output to disguise an unsuccessful synthesis.
+                audio_path.unlink(missing_ok=True)
+                (audio_dir / f"{scene.scene_id}_mastered.mp3").unlink(missing_ok=True)
+                token = retry_progress.set(
+                    (lambda message: on_progress(f"{scene.scene_id}: {message}", voice_pct))
+                    if on_progress else None
                 )
-            except Exception as exc:
-                raise RuntimeError(f"Falha ao gerar voz de {scene.scene_id}: {exc}") from exc
-            finally:
-                retry_progress.reset(token)
-            if not audio_path.is_file() or audio_path.stat().st_size == 0:
-                raise RuntimeError(
-                    f"O provedor de voz não gerou áudio para {scene.scene_id}. "
-                    "Confira a configuração e a disponibilidade do serviço de TTS."
-                )
+                try:
+                    voice.tts(
+                        text=spoken_text,
+                        voice_name=chosen_voice,
+                        voice_rate=kit.voice_rate if kit else 1.0,
+                        voice_file=str(audio_path),
+                    )
+                except Exception as exc:
+                    raise RuntimeError(f"Falha ao gerar voz de {scene.scene_id}: {exc}") from exc
+                finally:
+                    retry_progress.reset(token)
+                if not audio_path.is_file() or audio_path.stat().st_size == 0:
+                    raise RuntimeError(
+                        f"O provedor de voz não gerou áudio para {scene.scene_id}. "
+                        "Confira a configuração e a disponibilidade do serviço de TTS."
+                    )
+                if _measure_audio_duration(audio_path) <= 0:
+                    raise RuntimeError(f"Áudio inválido para {scene.scene_id}.")
+                remember_audio(audio_path, signature)
             # Master the voice track to EBU R128 (-14.0 LUFS) with high-pass and compressor
             mastered_path = audio_dir / f"{scene.scene_id}_mastered.mp3"
             try:
