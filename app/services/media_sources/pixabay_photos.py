@@ -13,10 +13,11 @@ from loguru import logger
 
 from app.config import config
 from app.services.media_ranker.schemas import MediaCandidate
-from .base import MediaSourceProvider
+from .base import MediaSourceProvider, ProviderCapabilities
 
 
 class PixabayPhotoProvider(MediaSourceProvider):
+    capabilities = ProviderCapabilities(("image",), True, False, True)
     @property
     def name(self) -> str:
         return "pixabay_photos"
@@ -51,12 +52,7 @@ class PixabayPhotoProvider(MediaSourceProvider):
                 proxies=config.proxy,
                 timeout=(5, 10),
             )
-            if resp.status_code != 200:
-                logger.warning(
-                    "Pixabay Photo search returned status {}: {}",
-                    resp.status_code, resp.text[:200]
-                )
-                return []
+            resp.raise_for_status()
 
             data = resp.json()
             hits = data.get("hits", [])
@@ -84,6 +80,7 @@ class PixabayPhotoProvider(MediaSourceProvider):
                         provider_asset_id=photo_id,
                         asset_id=f"pixabay_photo_{photo_id}",
                         query=query,
+                        description=hit.get("tags", ""),
                         width=w,
                         height=h,
                         duration=0.0,
@@ -102,6 +99,5 @@ class PixabayPhotoProvider(MediaSourceProvider):
 
             return candidates
 
-        except Exception as e:
-            logger.warning("Pixabay Photo search failed for query='{}': {}", query, e)
-            return []
+        except Exception:
+            raise

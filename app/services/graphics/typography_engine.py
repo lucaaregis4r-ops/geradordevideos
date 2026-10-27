@@ -62,7 +62,9 @@ class TypographyEngine:
         self,
         font_bold: Optional[str] = None,
         font_medium: Optional[str] = None,
+        accent: Optional[str] = None,
     ):
+        self.accent = ImageColor.getrgb(accent) if accent else None
         self.font_bold_path = font_bold or resolve_font_path(prefer_bold=True)
         self.font_medium_path = font_medium or resolve_font_path(prefer_bold=False)
 
@@ -130,9 +132,9 @@ class TypographyEngine:
                 lines = self.wrap_text(display_text, font, max_w=MAX_TEXT_WIDTH - 80)
 
             # Colors: Warm Gold / Yellow with dark background badge
-            text_color = (255, 215, 0, 255)  # Gold
+            text_color = (*(self.accent or (255, 215, 0)), 255)  # Gold
             badge_bg = (15, 17, 23, 220)      # Deep dark
-            border_color = (255, 215, 0, 200)
+            border_color = (*(self.accent or (255, 215, 0)), 200)
 
             pad_x = 40
             pad_y = 24
@@ -177,7 +179,7 @@ class TypographyEngine:
 
             text_color = (255, 255, 255, 255)
             badge_bg = (24, 28, 36, 210)
-            border_color = (56, 189, 248, 180)  # Electric blue
+            border_color = (*(self.accent or (56, 189, 248)), 180)  # Electric blue
 
             pad_x = 32
             pad_y = 20
@@ -278,6 +280,9 @@ def composite_overlay_to_clip(
     width: int = CANVAS_WIDTH,
     height: int = CANVAS_HEIGHT,
     fps: int = 30,
+    crop_mode: str = "center",
+    source_in: float = 0.0,
+    duration: float | None = None,
 ) -> Path:
     """Composites a transparent PNG overlay onto a video clip using FFmpeg."""
     src = Path(video_path).resolve()
@@ -290,15 +295,15 @@ def composite_overlay_to_clip(
     if not overlay.exists():
         raise FileNotFoundError(f"Overlay PNG not found: {overlay}")
 
+    from .framing import portrait_filter
     filter_complex = (
-        f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
-        f"crop={width}:{height},setsar=1,fps={fps}[bg];"
-        f"[bg][1:v]overlay=0:0:shortest=1[outv]"
+        f"[0:v]{portrait_filter(width, height, fps, crop_mode)}[bg];"
+        f"[bg][1:v]overlay=0:0:eof_action=repeat:shortest=0[outv]"
     )
 
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-        "-i", str(src),
+        "-ss", str(source_in), "-i", str(src),
         "-i", str(overlay),
         "-filter_complex", filter_complex,
         "-map", "[outv]",
@@ -307,6 +312,7 @@ def composite_overlay_to_clip(
         "-preset", "ultrafast",
         "-pix_fmt", "yuv420p",
         "-c:a", "copy",
+        *(["-t", str(duration)] if duration is not None else []),
         str(target),
     ]
 

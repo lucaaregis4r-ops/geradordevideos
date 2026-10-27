@@ -176,6 +176,13 @@ class PreVisualizer:
                 </div>
                 """
 
+            preview = ""
+            if seg.asset_path and Path(seg.asset_path).is_file():
+                uri = html.escape(Path(seg.asset_path).resolve().as_uri(), quote=True)
+                preview = (f'<img src="{uri}" style="max-width:100%;max-height:320px" alt="Plano {idx}">' if seg.asset_type == "photo"
+                           else f'<video controls preload="metadata" style="max-width:100%;max-height:320px" src="{uri}#t={seg.source_in},{seg.source_out or seg.source_in + dur}"></video>')
+            else:
+                preview = '<p>MÍDIA PENDENTE</p>'
             card = f"""
             <div class="segment-card">
                 <div class="card-header">
@@ -188,6 +195,8 @@ class PreVisualizer:
                     </div>
                 </div>
                 <div class="card-body">
+                    {preview}
+                    <p>{html.escape(seg.semantic_status)} · trecho {seg.source_in:.2f}–{seg.source_out or seg.source_in + dur:.2f}s · {html.escape(seg.crop_mode)}</p>
                     {f'<div class="narration">"{html.escape(narration)}"</div>' if narration else ''}
                     <div class="query-box">
                         <span class="query-icon">🔍</span>

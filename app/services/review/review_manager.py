@@ -6,12 +6,12 @@ Provides the core engine behind the Review Studio (Sections 22 & 23).
 from __future__ import annotations
 from dataclasses import asdict
 import json
+import hashlib
 from pathlib import Path
 import shutil
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.director.schemas import ScenePlan
-from app.services.media_ranker.candidate_builder import _generate_synthetic_clip
 from app.services.video_project import VideoProject
 
 
@@ -60,14 +60,27 @@ class ReviewManager:
             except Exception:
                 pass
 
+        audit_file = folder / "render_audit.json"
+        audit = json.loads(audit_file.read_text()) if audit_file.is_file() else {}
+        publishable = bool(audit.get("publishable") and audit.get("review_sha256") == hashlib.sha256(scenes_file.read_bytes()).hexdigest())
         return {
             "project_id": project_id,
             "plan": plan,
             "raw_plan": plan_data,
             "latest_video": latest_video,
+            "publishable": publishable,
             "current_revision": current_rev,
             "total_scenes": len(plan.scenes),
         }
+
+    def recover_pending_media(self, project_id: str, limit: int = 3, on_progress=None) -> dict:
+        from app.services.review.recovery import recover_pending
+        from app.services.media_ranker.media_searcher import MediaSearcher
+        report = recover_pending(self.projects_dir / project_id / "scenes.json",
+                                 MediaSearcher(media_cache_dir=self.media_cache_dir),
+                                 limit=limit, progress=on_progress)
+        self.evaluate_project_quality(project_id)
+        return report
 
     def swap_scene_media(
         self,
@@ -97,6 +110,12 @@ class ReviewManager:
         # Update selected_media in plan
         if new_candidate_info:
             updated_info = dict(new_candidate_info)
+            from app.services.media_ranker.asset_catalog import _measure_media
+            from app.services.media_ranker.crop_planner import useful_resolution
+            width, height, duration = _measure_media(footage_file)
+            updated_info.update(width=width, height=height, duration=duration)
+            if min(useful_resolution(width, height)) < 720 and min(width, height) >= 720:
+                updated_info["crop_mode"] = "fit"
             updated_info["local_path"] = str(footage_file)
             target_scene.selected_media = updated_info
         else:
@@ -109,122 +128,20 @@ class ReviewManager:
                 "final_score": 1.0,
             }
 
+        if target_scene.visual_beats:
+            raise ValueError("This scene has beats; select a specific beat to replace its media.")
+        target_scene.selected_media["semantic_status"] = "unverified"
+        target_scene.selected_media["semantic_score"] = 0.0
         # Save updated scenes.json
         with scenes_file.open("w", encoding="utf-8") as f:
             f.write(plan.to_json(indent=2))
 
-        # Re-build project manifest for VideoProject based on previous revision
-        render_folder = folder / "render_project"
-        vp = VideoProject(render_folder)
-        try:
-            prev_spec = vp.revision()
-            prev_scenes = {s["id"]: s for s in prev_spec.get("scenes", [])}
-            render_settings = prev_spec.get("settings", {"width": 1080, "height": 1920, "fps": 30})
-        except Exception:
-            prev_scenes = {}
-            render_settings = {"width": 1080, "height": 1920, "fps": 30}
-
-        def _extract_asset_path(val: Any) -> Optional[str]:
-            if not val:
-                return None
-            if isinstance(val, dict):
-                rel = val.get("path")
-                if rel:
-                    p = render_folder / rel
-                    if p.exists():
-                        return str(p.resolve())
-                return None
-            p = Path(val)
-            if not p.is_absolute():
-                p = render_folder / p
-            return str(p.resolve()) if p.exists() else str(p)
-
-        project_scenes = []
-        for s in plan.scenes:
-            if s.scene_id == scene_id:
-                # Target swapped scene
-                f_path = str(footage_file.resolve())
-                prev_audio = (prev_scenes.get(s.scene_id) or {}).get("audio")
-                audio_path = _extract_asset_path(prev_audio)
-                if not audio_path:
-                    def_audio = folder / "audio" / f"{s.scene_id}.mp3"
-                    audio_path = str(def_audio.resolve()) if def_audio.exists() else None
-
-                seg_dur = float(s.end - s.start) if (s.end and s.start) else (prev_scenes.get(s.scene_id) or {}).get("duration", 4.0)
-                project_scenes.append(
-                    {
-                        "id": s.scene_id,
-                        "narration": s.narration,
-                        "duration": seg_dur,
-                        "footage": f_path,
-                        "audio": audio_path,
-                    }
-                )
-            elif s.scene_id in prev_scenes:
-                # 100% exact copy of unchanged scene from previous revision to guarantee cache hit!
-                prev_s = prev_scenes[s.scene_id]
-                footage_path = _extract_asset_path(prev_s.get("footage"))
-                audio_path = _extract_asset_path(prev_s.get("audio"))
-                project_scenes.append(
-                    {
-                        "id": s.scene_id,
-                        "narration": prev_s.get("narration", s.narration),
-                        "duration": prev_s.get("duration", 4.0),
-                        "footage": footage_path,
-                        "audio": audio_path,
-                    }
-                )
-            else:
-                selected = s.selected_media or {}
-                f_path = selected.get("local_path")
-                if not f_path or not Path(f_path).exists():
-                    fallback_clip = self.media_cache_dir / f"fallback_{s.scene_id}.mp4"
-                    _generate_synthetic_clip(s.queries[0] if s.queries else s.narration, fallback_clip)
-                    f_path = str(fallback_clip)
-
-                audio_file = folder / "audio" / f"{s.scene_id}.mp3"
-                project_scenes.append(
-                    {
-                        "id": s.scene_id,
-                        "narration": s.narration,
-                        "duration": float(s.end - s.start) if (s.end and s.start) else 4.0,
-                        "footage": str(Path(f_path).resolve()),
-                        "audio": str(audio_file) if audio_file.exists() else None,
-                    }
-                )
-
-        new_rev = vp.create_revision(
-            {
-                "project_id": project_id,
-                "settings": render_settings,
-                "scenes": project_scenes,
-            }
-        )
-        rev_id = new_rev["revision_id"]
-
-        # Track reused vs rebuilt stages
-        reused_stages: List[str] = []
-        built_stages: List[str] = []
-
-        def on_stage(stage, reused):
-            if reused:
-                reused_stages.append(stage.key)
-            else:
-                built_stages.append(stage.key)
-
-        status = vp.render(rev_id, on_stage=on_stage)
-        export_path = status.get("export", {}).get("path")
-
-        return {
-            "project_id": project_id,
-            "revision_id": rev_id,
-            "status": status["state"],
-            "video_path": export_path,
-            "swapped_scene": scene_id,
-            "reused_stages": reused_stages,
-            "built_stages": built_stages,
-            "stages_count": len(reused_stages) + len(built_stages),
-        }
+        # A replacement invalidates relevance approval. Do not synthesize audio or
+        # start an export merely because the user is comparing a candidate.
+        self.evaluate_project_quality(project_id)
+        return {"project_id": project_id, "swapped_scene": scene_id,
+                "status": "pending_review", "video_path": None,
+                "selected_media": target_scene.selected_media}
 
     def direct_script(
         self,
@@ -298,6 +215,10 @@ class ReviewManager:
             scene.preferred_motion = preferred_motion
         if intent is not None:
             scene.intent = intent
+        for target in scene.visual_beats or [scene]:
+            if target.selected_media:
+                target.selected_media["semantic_status"] = "unverified"
+                target.selected_media["semantic_score"] = 0.0
 
         with scenes_file.open("w", encoding="utf-8") as f:
             f.write(plan.to_json(indent=2))
@@ -340,6 +261,9 @@ class ReviewManager:
             beat.text_overlay = text_overlay.strip() if text_overlay.strip() else None
         if intent is not None:
             beat.intent = intent
+        if beat.selected_media:
+            beat.selected_media["semantic_status"] = "unverified"
+            beat.selected_media["semantic_score"] = 0.0
 
         with scenes_file.open("w", encoding="utf-8") as f:
             f.write(plan.to_json(indent=2))
@@ -425,9 +349,19 @@ class ReviewManager:
             raise ValueError(f"Beat '{beat_id}' not found in scene '{scene_id}'")
 
         f_path = str(Path(new_footage_path).resolve())
+        if not Path(f_path).is_file():
+            raise FileNotFoundError(f_path)
         if new_candidate_info:
             updated = dict(new_candidate_info)
+            from app.services.media_ranker.asset_catalog import _measure_media
+            from app.services.media_ranker.crop_planner import useful_resolution
+            width, height, duration = _measure_media(Path(f_path))
+            updated.update(width=width, height=height, duration=duration)
+            if min(useful_resolution(width, height)) < 720 and min(width, height) >= 720:
+                updated["crop_mode"] = "fit"
             updated["local_path"] = f_path
+            updated["semantic_status"] = "unverified"
+            updated["semantic_score"] = 0.0
             beat.selected_media = updated
         else:
             beat.selected_media = {
@@ -440,7 +374,65 @@ class ReviewManager:
         with scenes_file.open("w", encoding="utf-8") as f:
             f.write(plan.to_json(indent=2))
 
+        self.evaluate_project_quality(project_id)
         return {"project_id": project_id, "scene_id": scene_id, "beat_id": beat_id, "selected_media": beat.selected_media}
+
+    def review_media(self, project_id: str, scene_id: str, beat_id: Optional[str],
+                     approved: bool, reason: str = "") -> None:
+        """Record explicit human relevance review for the current material and context."""
+        path = self.projects_dir / project_id / "scenes.json"
+        plan = ScenePlan.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        scene = next(s for s in plan.scenes if s.scene_id == scene_id)
+        target = next(b for b in scene.visual_beats if b.beat_id == beat_id) if beat_id else scene
+        if not target.selected_media:
+            raise ValueError("pending_media")
+        target.selected_media["semantic_status"] = "reviewed" if approved else "rejected"
+        target.selected_media["semantic_score"] = 1.0 if approved else 0.0
+        target.selected_media["review_reason"] = reason
+        path.write_text(plan.to_json(), encoding="utf-8")
+        self.evaluate_project_quality(project_id)
+
+    def search_media_for_beat(self, project_id: str, scene_id: str, beat_id: str, prefer_video: bool = False) -> None:
+        from dataclasses import replace
+        from app.services.media_ranker.media_searcher import MediaSearcher
+        path = self.projects_dir / project_id / "scenes.json"
+        plan = ScenePlan.from_dict(json.loads(path.read_text(encoding="utf-8")))
+        scene = next(s for s in plan.scenes if s.scene_id == scene_id)
+        beat = next(b for b in scene.visual_beats if b.beat_id == beat_id)
+        if prefer_video:
+            beat.visual_type = "stock_video"
+            beat.component_type = None
+        target = replace(scene, visual_beats=[beat])
+        searcher = MediaSearcher(media_cache_dir=self.media_cache_dir)
+        from app.services.media_ranker.schemas import MediaCandidate
+        for other_scene in plan.scenes:
+            for other in other_scene.visual_beats or [other_scene]:
+                if other is beat:
+                    if other.selected_media and other.selected_media.get("semantic_status") == "rejected":
+                        searcher.deduplicator.block_asset(other.selected_media["asset_id"])
+                elif other.selected_media:
+                    searcher.deduplicator.mark_used(MediaCandidate.from_dict(other.selected_media))
+        searcher.populate_scene_plan(replace(plan, scenes=[target]))
+        path.write_text(plan.to_json(), encoding="utf-8")
+        self.evaluate_project_quality(project_id)
+
+    def import_mixkit_for_beat(self, project_id: str, scene_id: str, beat_id: Optional[str], url: str) -> None:
+        """Resolve one user-selected page, download its free rendition, then review."""
+        import re
+        from app.services.media_ranker.schemas import MediaCandidate
+        from app.services.media_ranker.media_searcher import MediaSearcher
+        match = re.fullmatch(r"https://mixkit\.co/free-stock-video/[a-z0-9-]+-(\d+)/?", url.strip())
+        if not match:
+            raise ValueError("Informe a página de um vídeo do Mixkit.")
+        candidate = MediaCandidate(provider="mixkit", asset_id=f"mixkit_{match[1]}",
+            provider_asset_id=match[1], source_page=url.strip(), url=url.strip())
+        path = MediaSearcher(media_cache_dir=self.media_cache_dir)._download_candidate_asset(candidate)
+        if not path:
+            raise ValueError("O download não foi concluído; a seleção anterior foi preservada.")
+        if beat_id:
+            self.swap_beat_media(project_id, scene_id, beat_id, path, candidate.to_dict())
+        else:
+            self.swap_scene_media(project_id, scene_id, path, new_candidate_info=candidate.to_dict())
 
     def evaluate_project_quality(self, project_id: str) -> Dict[str, Any]:
         """Evaluates Quality Gate and generates pre-render reports for a project."""
@@ -463,6 +455,8 @@ class ReviewManager:
         assembly_plan = planner.build_plan(plan)
         checker = QualityChecker()
         score = checker.evaluate(assembly_plan)
+        from app.services.assembly.media_mix import summarize_media_mix
+        media_mix = summarize_media_mix(assembly_plan)
 
         pre_vis = PreVisualizer()
         storyboard = pre_vis.save_reports(
@@ -487,6 +481,7 @@ class ReviewManager:
         return {
             "project_id": project_id,
             "quality_score": score.to_dict(),
+            "media_mix": media_mix,
             "passed": score.passed,
             "alerts": score.alerts,
             "assembly_plan_path": str(assembly_file),

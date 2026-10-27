@@ -162,6 +162,8 @@ def test_media_sources_manager_aggregate():
     """Validates that MediaSourcesManager queries all active providers and merges candidates."""
     p1 = MagicMock(spec=MediaSourceProvider)
     p1.is_available.return_value = True
+    from app.services.media_sources.base import ProviderCapabilities
+    p1.capabilities = ProviderCapabilities(("image",))
     p1.name = "mock_p1"
     p1.search.return_value = [
         MediaCandidate(provider="p1", asset_id="c1", query="test", url="http://p1.jpg")
@@ -169,6 +171,7 @@ def test_media_sources_manager_aggregate():
 
     p2 = MagicMock(spec=MediaSourceProvider)
     p2.is_available.return_value = True
+    p2.capabilities = ProviderCapabilities(("image",))
     p2.name = "mock_p2"
     p2.search.return_value = [
         MediaCandidate(provider="p2", asset_id="c2", query="test", url="http://p2.jpg")

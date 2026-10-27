@@ -8343,6 +8343,35 @@ def _render_fabrica_de_bermudas_tab():
         "deduplicação visual rigorosa, Safe Area 9:16 e masterização broadcast (-14.0 LUFS)."
     )
 
+    # Recover the most recent submitted script after a server restart.
+    if "bermudas_script_input" not in st.session_state and "fb_script" not in st.session_state:
+        saved_scripts = list(Path("storage/scripts").glob("*/v*.json"))
+        if saved_scripts:
+            latest_script = max(saved_scripts, key=lambda path: path.stat().st_mtime)
+            try:
+                saved_input = json.loads(latest_script.read_text(encoding="utf-8"))
+                if isinstance(saved_input.get("raw_text"), str):
+                    st.session_state["bermudas_script_input"] = saved_input["raw_text"]
+                    st.session_state["bermudas_title_input"] = saved_input.get("title") or "Ensaio Audiovisual"
+            except (OSError, ValueError):
+                pass
+
+    with st.expander("Preparar um roteiro na sua IA"):
+        guide_path = Path(__file__).resolve().parents[1] / "docs" / "PROMPT_ROTEIRISTA_FABRICA.md"
+        if guide_path.is_file():
+            guide = guide_path.read_text(encoding="utf-8")
+            st.write("Copie estas instruções para a IA que escreve seus roteiros e substitua o campo final pelo seu tema. Cole aqui o roteiro completo que ela devolver.")
+            st.code(guide, language="markdown")
+            st.download_button("Baixar instruções para a IA", guide, file_name="prompt_roteirista_fabrica.md", mime="text/markdown")
+        example_path = Path(__file__).resolve().parents[1] / "docs" / "exemplos" / "roteiro_caneca_fabrica_v1.md"
+        if example_path.is_file() and st.button("Carregar exemplo no formato Fábrica V1", key="load_factory_v1"):
+            example = example_path.read_text(encoding="utf-8")
+            st.session_state["fb_script"] = example
+            st.session_state["bermudas_script_input"] = example
+            st.session_state["fb_title"] = "A história de uma caneca"
+            st.session_state["bermudas_title_input"] = "A história de uma caneca"
+            st.rerun()
+
     st.write("**💡 Carregar Roteiro de Exemplo:**")
     col_ex1, col_ex2, col_ex3 = st.columns(3)
     with col_ex1:
@@ -8389,12 +8418,8 @@ def _render_fabrica_de_bermudas_tab():
             key="fb_title",
         )
     with col_v:
-        voice_options = [
-            "pt-BR-AntonioNeural-Male",
-            "pt-BR-FranciscaNeural-Female",
-            "pt-BR-ThalitaNeural-Female",
-            "en-US-AndrewNeural-Male",
-        ]
+        from app.services.voice_studio.catalog import production_voices
+        voice_options = [v["id"] for v in production_voices()]
         chosen_voice = st.selectbox(
             "Voz da Narração (TTS):",
             options=voice_options,
@@ -8423,15 +8448,36 @@ def _render_fabrica_de_bermudas_tab():
         value=st.session_state.get("bermudas_script_input", default_script),
         height=140,
         key="fb_script",
-        help="O texto falado não será alterado. Cada frase se torna uma cena com busca concreta de imagens.",
+        help="Aceita narração simples ou roteiro com blocos IMAGEM, NARRAÇÃO e TEXTO. Apenas a narração será falada.",
     )
+    if script_text.strip():
+        from app.services.editorial.directives import strip_stage_directions
+        with st.expander("Conferir a narração que será falada"):
+            st.text(strip_stage_directions(script_text))
+        from app.services.director.screenplay_director import is_factory_screenplay
+        if is_factory_screenplay(script_text):
+            st.caption("Formato Fábrica V1: os planos, buscas e textos serão lidos diretamente, preservando a narração.")
+
+    from app.services.branding.kit import load_kit
+    saved_kit = load_kit()
+    use_brand = st.checkbox("Aplicar identidade salva", value=False,
+                            help="Usa a voz, velocidade, cor de destaque e trilha salvas no editor de identidade.")
+    if use_brand:
+        from app.services.branding.library import list_presets, preset_label
+        presets = list_presets()
+        selected_preset = st.selectbox("Canal / preset de identidade", ["legacy", *presets],
+            format_func=lambda key: "Identidade anterior" if key == "legacy" else preset_label(presets[key]))
+        if selected_preset in presets:
+            saved_kit = presets[selected_preset]
+        st.caption(f"Identidade: {saved_kit.name} · Voz: {saved_kit.voice} · {saved_kit.voice_rate:.2f}x")
+    st.page_link("pages/4_🎨_Identidade.py", label="Editar identidade e ouvir vozes", icon="🎨")
 
     col_opt1, col_opt2 = st.columns([1.6, 1.0])
     with col_opt1:
         allow_preview = st.checkbox(
-            "🎬 Renderizar vídeo mesmo se houver avisos no Quality Gate (Modo Rascunho / Preview)",
-            value=True,
-            help="Garante que o vídeo seja renderizado com cortes e efeitos mesmo que haja pequenos avisos editoriais, permitindo assistir ao resultado de imediato.",
+            "Prévia com revisão editorial pendente",
+            value=False,
+            help="Permite prévia de relevância pendente. Cenas sem mídia, imagens provisórias e falhas técnicas sempre bloqueiam o vídeo.",
         )
 
     col_btn, col_review_link = st.columns([2, 1])
@@ -8471,19 +8517,29 @@ def _render_fabrica_de_bermudas_tab():
                         brand_style=chosen_style,
                         voice_name=chosen_voice,
                         allow_unpassed_draft=allow_preview,
+                        brand_kit=saved_kit.model_dump() if use_brand else None,
                         on_progress=progress_callback,
                     )
                 st.session_state["latest_bermudas_draft"] = draft
-                st.success("🎉 Produção concluída com sucesso!")
+                if draft.get("video_path"):
+                    st.success("Vídeo gerado; confira o resultado e os avisos abaixo.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Erro durante a produção: {e}")
                 logger.exception("Erro ao produzir draft na Fábrica de Bermudas")
 
+    st.page_link("pages/6_⏳_Producoes_Salvas.py", label="Produções salvas e retomadas automáticas", icon="⏳")
     draft = st.session_state.get("latest_bermudas_draft")
+    if draft and draft.get("status") == "waiting_quota":
+        st.info(draft["error"] + " Acompanhe em Produções salvas.")
+        return
     if draft:
         st.divider()
         st.markdown("### 📹 Resultado da Produção Recente")
+        pending = draft.get("readiness", {}).get("pending", [])
+        if pending:
+            st.error(f"{len(pending)} cenas precisam de mídia antes de renderizar.")
+            st.dataframe(pending, use_container_width=True)
         col_video, col_info = st.columns([1.2, 2.0])
 
         with col_video:
@@ -8494,16 +8550,17 @@ def _render_fabrica_de_bermudas_tab():
             else:
                 if draft.get("error"):
                     st.warning(f"⚠️ {draft.get('error')}")
-                st.info("O roteiro e storyboard foram gerados. Deseja renderizar o vídeo agora?")
-                if st.button("▶️ Renderizar Vídeo Agora (Modo Preview)", type="primary", key="btn_force_render"):
+                st.info("Roteiro e storyboard salvos. Resolva as pendências no Review Studio antes de renderizar.")
+                if st.button("▶️ Validar e renderizar revisão", type="primary", key="btn_force_render"):
                     with st.spinner("Renderizando vídeo com FFmpeg a partir do plano existente..."):
                         try:
                             from app.services.factory import ShortsFactory
                             fac = ShortsFactory(base_dir="storage")
                             res = fac.render_existing_draft(draft["script_id"])
-                            draft["video_path"] = res.get("video_path")
+                            draft.update(res)
                             st.session_state["latest_bermudas_draft"] = draft
-                            st.success("Vídeo renderizado com sucesso!")
+                            if res.get("video_path"):
+                                st.success("Vídeo renderizado com sucesso!")
                             st.rerun()
                         except Exception as ex:
                             st.error(f"Erro ao renderizar: {ex}")
@@ -8515,7 +8572,7 @@ def _render_fabrica_de_bermudas_tab():
 
             c1, c2, c3 = st.columns(3)
             with c1:
-                st.metric("Score Semântico", f"{score.get('semantic_match_score', 0):.2f}/1.0")
+                st.metric("Score Semântico", f"{score.get('semantic_match_avg', 0):.2f}/1.0")
             with c2:
                 st.metric("Safe Area", f"{score.get('text_safe_area_errors', 0)} erros")
             with c3:

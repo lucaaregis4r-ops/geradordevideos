@@ -87,7 +87,7 @@ class ScriptManager:
         latest_num = self.get_latest_version_number(script_id)
         if latest_num > 0 and not force_new_version:
             latest = self.get_version(script_id, latest_num)
-            if latest and latest.sha256 == text_hash:
+            if latest and latest.sha256 == text_hash and latest.raw_text == raw_clean:
                 # Text is identical to current version; preserve without duplicating
                 return latest
 

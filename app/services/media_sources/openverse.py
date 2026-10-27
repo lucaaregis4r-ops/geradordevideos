@@ -54,12 +54,7 @@ class OpenverseProvider(MediaSourceProvider):
                 proxies=config.proxy,
                 timeout=(3, 6),
             )
-            if resp.status_code != 200:
-                logger.warning(
-                    "Openverse search returned status {}: {}",
-                    resp.status_code, resp.text[:200]
-                )
-                return []
+            resp.raise_for_status()
 
             data = resp.json()
             results = data.get("results", [])
@@ -89,6 +84,7 @@ class OpenverseProvider(MediaSourceProvider):
                         provider_asset_id=item_id,
                         asset_id=f"openverse_{item_id}",
                         query=query,
+                        description=item.get("title", ""),
                         width=1080,
                         height=1920,
                         duration=0.0,
@@ -107,6 +103,5 @@ class OpenverseProvider(MediaSourceProvider):
 
             return candidates
 
-        except Exception as e:
-            logger.warning("Openverse search failed for query='{}': {}", query, e)
-            return []
+        except Exception:
+            raise

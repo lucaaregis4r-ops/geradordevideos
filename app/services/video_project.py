@@ -200,6 +200,7 @@ def stage_graph(spec: dict) -> list[Stage]:
                 "scene",
                 timing,
                 scene["footage"],
+                scene.get("source_in", 0), scene.get("source_out"), scene.get("crop_mode", "center"), "framing-v2",
                 settings.width,
                 settings.height,
                 settings.fps,
@@ -312,7 +313,7 @@ class VideoProject:
                 "footage",
                 "audio",
                 "narration",
-                "duration",
+                "duration", "source_in", "source_out", "crop_mode",
             }:
                 raise ProjectError("unknown scene fields")
             scene_id = _identifier(raw["id"])
@@ -333,11 +334,21 @@ class VideoProject:
                 raise ProjectError(
                     "narration requires prepared audio; this renderer does not generate speech"
                 )
+            source_in = raw.get("source_in", 0.0)
+            source_out = raw.get("source_out")
+            crop_mode = raw.get("crop_mode", "center")
+            if isinstance(source_in, bool) or not isinstance(source_in, (int, float)) or not math.isfinite(source_in) or source_in < 0:
+                raise ProjectError("source_in must be finite and nonnegative")
+            if source_out is not None and (isinstance(source_out, bool) or not isinstance(source_out, (int, float)) or not math.isfinite(source_out) or source_out <= source_in):
+                raise ProjectError("source_out must be finite and after source_in")
+            if crop_mode not in {"center", "fit"}:
+                raise ProjectError("unsupported crop_mode")
             scenes.append(
                 {
                     "id": scene_id,
                     "narration": narration,
                     "duration": duration,
+                    "source_in": source_in, "source_out": source_out, "crop_mode": crop_mode,
                     "footage": self._asset(raw["footage"], Path(relative_to)),
                     "audio": self._asset(raw["audio"], Path(relative_to))
                     if raw.get("audio")
@@ -725,12 +736,15 @@ class VideoProject:
                 duration = self._read(Path(results[f"{scene['id']}:timing"]["path"]))[
                     "duration"
                 ]
-                vf = f"scale={settings.width}:{settings.height}:force_original_aspect_ratio=increase,crop={settings.width}:{settings.height},setsar=1,fps={settings.fps}"
+                from app.services.graphics.framing import portrait_filter
+                vf = portrait_filter(settings.width, settings.height, settings.fps, scene.get("crop_mode", "center"))
+                if scene.get("source_out") is not None and scene["source_out"] - scene.get("source_in", 0) + 1 / settings.fps < duration:
+                    raise ProjectError("selected interval is shorter than narration")
+                source_args = (["-ss", str(scene.get("source_in", 0))] if scene.get("source_out") is not None
+                               else ["-stream_loop", "-1"])
                 self._run(
-                    base
+                    base + source_args
                     + [
-                        "-stream_loop",
-                        "-1",
                         "-format_whitelist",
                         PREPARED_FORMATS,
                         "-i",

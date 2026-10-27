@@ -7,6 +7,8 @@ videos with known quality issues (duplicates, missing assets, etc.).
 from __future__ import annotations
 from collections import Counter
 import logging
+from pathlib import Path
+import math
 from typing import List
 
 from .schemas import AssemblyPlan, QualityScore
@@ -20,8 +22,8 @@ DEFAULT_THRESHOLDS = {
     "min_visual_diversity": 0.3,
     "max_segments_without_visual": 0,
     "max_text_safe_area_errors": 0,
-    "max_low_resolution": 2,
-    "min_semantic_match_avg": 0.4,
+    "max_low_resolution": 0,
+    "min_semantic_match_avg": 0.6,
     "max_synthetic_assets": 0,
     "max_consecutive_same_treatment": 3,
 }
@@ -46,7 +48,7 @@ class QualityChecker:
             semantic_match_avg=self._compute_semantic_avg(plan),
             visual_diversity=self._compute_diversity(plan),
             text_safe_area_errors=self._validate_text_safe_area(plan),
-            low_resolution_count=0,    # Placeholder — needs asset metadata
+            low_resolution_count=self._count_low_resolution(plan),
             segments_without_visual=self._count_missing_visuals(plan),
             synthetic_assets=self._count_synthetic_assets(plan),
             consecutive_treatment_violations=self._check_consecutive_treatments(plan),
@@ -54,6 +56,29 @@ class QualityChecker:
 
         # Determine pass/fail
         alerts = self._check_alerts(score)
+        creator_counts = Counter(
+            str(segment.provenance.get("creator_name", "")).strip().casefold()
+            for segment in plan.segments
+            if not segment.is_callback and segment.provenance.get("creator_name")
+        )
+        for creator, count in creator_counts.items():
+            if creator and count > 2:
+                alerts.append(f"creator_limit:{creator}={count} (max=2)")
+        if not plan.segments:
+            alerts.append("empty_timeline")
+        previous_end = 0.0
+        for segment in plan.segments:
+            if not math.isfinite(segment.semantic_score) or segment.semantic_score < 0.6 or segment.semantic_status not in {"reviewed", "visual_verified", "planned_graphic"}:
+                alerts.append(f"pending_review:{segment.segment_id}")
+            if (not math.isfinite(segment.start) or not math.isfinite(segment.end)
+                    or segment.end <= segment.start or abs(segment.start - previous_end) > 1 / 30):
+                alerts.append(f"invalid_timeline:{segment.segment_id}")
+            if not math.isfinite(segment.source_in) or segment.source_in < 0 or (segment.source_out is not None and
+                    (not math.isfinite(segment.source_out) or segment.source_out <= segment.source_in)):
+                alerts.append(f"invalid_source_interval:{segment.segment_id}")
+            previous_end = segment.end
+        if abs(previous_end - plan.total_duration) > 1 / 30:
+            alerts.append("invalid_total_duration")
         score.alerts = alerts
         score.passed = len(alerts) == 0
 
@@ -91,7 +116,6 @@ class QualityChecker:
         scores = [
             getattr(s, "semantic_score", 0.0)
             for s in plan.segments
-            if getattr(s, "semantic_score", 0.0) > 0
         ]
         if not scores:
             return 0.0
@@ -158,8 +182,28 @@ class QualityChecker:
         """Counts segments with no valid asset path."""
         return sum(
             1 for s in plan.segments
-            if not s.asset_path or s.asset_id.startswith("missing_")
+            if not s.asset_path or not Path(s.asset_path).is_file() or s.asset_id.startswith("missing_")
         )
+
+    def _count_low_resolution(self, plan: AssemblyPlan) -> int:
+        from app.services.media_ranker.asset_catalog import _measure_media
+        errors = 0
+        for segment in plan.segments:
+            if not segment.asset_path or not Path(segment.asset_path).is_file():
+                continue
+            width, height, duration = _measure_media(Path(segment.asset_path))
+            # Effective central 9:16 crop, with a minimum 720p portrait delivery.
+            from app.services.media_ranker.crop_planner import useful_resolution
+            useful_width, useful_height = useful_resolution(width, height, segment.crop_mode)
+            if useful_width < 720 or useful_height < (720 if segment.crop_mode == "fit" else 1280):
+                errors += 1
+            if segment.asset_type == "video" and (
+                segment.source_in < 0 or duration + 1 / 30 < segment.source_in + segment.end - segment.start
+                or (segment.source_out is not None and (segment.source_out > duration + 1 / 30
+                    or segment.source_out < segment.source_in + segment.end - segment.start - 1 / 30))
+            ):
+                errors += 1
+        return errors
 
     def _count_synthetic_assets(self, plan: AssemblyPlan) -> int:
         """Counts segments using synthetic placeholder clips."""
@@ -217,7 +261,7 @@ class QualityChecker:
                 f"(max={self.thresholds['max_low_resolution']})"
             )
 
-        if score.semantic_match_avg > 0 and score.semantic_match_avg < self.thresholds["min_semantic_match_avg"]:
+        if score.semantic_match_avg < self.thresholds["min_semantic_match_avg"]:
             alerts.append(
                 f"semantic_match_avg={score.semantic_match_avg:.2f} "
                 f"(min={self.thresholds['min_semantic_match_avg']})"
@@ -237,6 +281,17 @@ class QualityChecker:
 
             text = s.overlay_text.strip()
             level = (s.text_level or "caption").lower()
+            from app.services.graphics.typography_engine import TypographyEngine, validate_box_in_safe_area
+            try:
+                overlay = TypographyEngine().render_overlay(text, level=level)
+                box = overlay.getchannel("A").getbbox()
+                if box is None or not validate_box_in_safe_area(box)[0]:
+                    errors += 1
+                    continue
+            except Exception:
+                errors += 1
+                continue
+
 
             # Level 1 (TITLE): should not exceed 6 words; if > 6 words at title font size, it overflows
             if level == "title" and len(text.split()) > 6:

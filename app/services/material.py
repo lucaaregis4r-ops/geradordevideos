@@ -340,6 +340,7 @@ def search_videos_pexels(
     search_term: str,
     minimum_duration: int,
     video_aspect: VideoAspect = VideoAspect.portrait,
+    strict_errors: bool = False,
 ) -> List[MaterialInfo]:
     aspect = VideoAspect(video_aspect)
     video_width, video_height = aspect.to_resolution()
@@ -361,8 +362,10 @@ def search_videos_pexels(
             headers=headers,
             proxies=config.proxy,
             verify=_get_tls_verify(),
-            timeout=(30, 60),
+            timeout=(3, 8) if strict_errors else (30, 60),
         )
+        if strict_errors:
+            r.raise_for_status()
         response = r.json()
         video_items = []
         if not isinstance(response, dict) or not isinstance(
@@ -415,6 +418,7 @@ def search_videos_pexels(
                 item.duration = duration
                 item.source_info = {
                     "provider": "pexels",
+                    "description": v.get("description") or v.get("title") or "",
                     "search_term": search_term,
                     "asset_id": (
                         str(v.get("id")) if v.get("id") is not None else None
@@ -434,6 +438,8 @@ def search_videos_pexels(
                 video_items.append(item)
         return video_items
     except Exception as e:
+        if strict_errors:
+            raise
         logger.error(
             "pexels video search failed: "
             f"error={type(e).__name__}, detail={_redact_request_error(e, api_key)}"
@@ -446,6 +452,7 @@ def search_videos_pixabay(
     search_term: str,
     minimum_duration: int,
     video_aspect: VideoAspect = VideoAspect.portrait,
+    strict_errors: bool = False,
 ) -> List[MaterialInfo]:
     aspect = VideoAspect(video_aspect)
 
@@ -467,8 +474,10 @@ def search_videos_pixabay(
 
     try:
         r = requests.get(
-            query_url, proxies=config.proxy, verify=_get_tls_verify(), timeout=(30, 60)
+            query_url, proxies=config.proxy, verify=_get_tls_verify(), timeout=(3, 8) if strict_errors else (30, 60)
         )
+        if strict_errors:
+            r.raise_for_status()
         status_code = int(getattr(r, "status_code", 200))
         headers = getattr(r, "headers", {}) or {}
         content_type = str(headers.get("content-type", ""))
@@ -553,6 +562,7 @@ def search_videos_pixabay(
                     item.duration = duration
                     item.source_info = {
                         "provider": "pixabay",
+                        "description": v.get("tags", ""),
                         "search_term": search_term,
                         "asset_id": (
                             str(v.get("id")) if v.get("id") is not None else None
@@ -574,6 +584,8 @@ def search_videos_pixabay(
                     break
         return video_items
     except Exception as e:
+        if strict_errors:
+            raise
         error_message = _redact_request_error(e, api_key)
         logger.error(
             "pixabay search request failed: "
@@ -587,6 +599,7 @@ def search_videos_coverr(
     search_term: str,
     minimum_duration: int,
     video_aspect: VideoAspect = VideoAspect.portrait,
+    strict_errors: bool = False,
 ) -> List[MaterialInfo]:
     """
     Coverr (https://coverr.co) - free HD/4K stock videos,
@@ -630,8 +643,10 @@ def search_videos_coverr(
             headers=headers,
             proxies=config.proxy,
             verify=_get_tls_verify(),
-            timeout=(30, 60),
+            timeout=(3, 8) if strict_errors else (30, 60),
         )
+        if strict_errors:
+            r.raise_for_status()
         response = r.json()
         video_items: List[MaterialInfo] = []
 
@@ -677,6 +692,7 @@ def search_videos_coverr(
             item.duration = duration
             item.source_info = {
                 "provider": "coverr",
+                "description": v.get("description") or v.get("title") or "",
                 "search_term": search_term,
                 "asset_id": str(video_id),
                 "source_page": _safe_public_url(v.get("canonical_url") or v.get("url")),
@@ -690,6 +706,8 @@ def search_videos_coverr(
             video_items.append(item)
         return video_items
     except Exception as e:
+        if strict_errors:
+            raise
         logger.error(
             "coverr video search failed: "
             f"error={type(e).__name__}, detail={_redact_request_error(e, api_key)}"

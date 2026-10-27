@@ -1,0 +1,332 @@
+[
+  {
+    "id": "case_01",
+    "category": "coffee",
+    "brief": "Pacote de café sendo colocado na prateleira",
+    "queries": [
+      "stocking coffee bags shelf",
+      "stocking coffee bags shelf close up",
+      "stocking coffee bags shelf footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_02",
+    "category": "coffee",
+    "brief": "Caixa lendo o código de barras de um pacote de café",
+    "queries": [
+      "cashier scanning coffee package",
+      "cashier scanning coffee package close up",
+      "cashier scanning coffee package footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_03",
+    "category": "coffee",
+    "brief": "Mãos colhendo frutos maduros de café",
+    "queries": [
+      "hands picking ripe coffee cherries",
+      "hands picking ripe coffee cherries close up",
+      "hands picking ripe coffee cherries footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_04",
+    "category": "coffee",
+    "brief": "Grãos de café sendo torrados no tambor",
+    "queries": [
+      "coffee beans roasting drum",
+      "coffee beans roasting drum close up",
+      "coffee beans roasting drum footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_05",
+    "category": "coffee",
+    "brief": "Café moído caindo no porta-filtro",
+    "queries": [
+      "ground coffee falling portafilter",
+      "ground coffee falling portafilter close up",
+      "ground coffee falling portafilter footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_06",
+    "category": "coffee",
+    "brief": "Máquina extraindo café espresso",
+    "queries": [
+      "espresso coffee extraction machine",
+      "espresso coffee extraction machine close up",
+      "espresso coffee extraction machine footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_07",
+    "category": "coffee",
+    "brief": "Leite sendo despejado no café",
+    "queries": [
+      "pouring milk into coffee cup",
+      "pouring milk into coffee cup close up",
+      "pouring milk into coffee cup footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_08",
+    "category": "coffee",
+    "brief": "Grãos sendo embalados em sacos",
+    "queries": [
+      "packing roasted coffee beans bags",
+      "packing roasted coffee beans bags close up",
+      "packing roasted coffee beans bags footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_09",
+    "category": "coffee",
+    "brief": "Xícara de cerâmica sendo moldada",
+    "queries": [
+      "hands shaping ceramic cup pottery",
+      "hands shaping ceramic cup pottery close up",
+      "hands shaping ceramic cup pottery footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_10",
+    "category": "coffee",
+    "brief": "Mão colocando uma xícara na mesa",
+    "queries": [
+      "hand placing coffee cup table",
+      "hand placing coffee cup table close up",
+      "hand placing coffee cup table footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_11",
+    "category": "retail",
+    "brief": "Pessoa lendo a etiqueta de uma camiseta",
+    "queries": [
+      "person reading t-shirt price tag",
+      "person reading t-shirt price tag close up",
+      "person reading t-shirt price tag footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_12",
+    "category": "retail",
+    "brief": "Funcionário repondo produtos na gôndola",
+    "queries": [
+      "worker stocking grocery shelf",
+      "worker stocking grocery shelf close up",
+      "worker stocking grocery shelf footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_13",
+    "category": "retail",
+    "brief": "Mãos contando cédulas no caixa",
+    "queries": [
+      "hands counting banknotes cash register",
+      "hands counting banknotes cash register close up",
+      "hands counting banknotes cash register footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_14",
+    "category": "retail",
+    "brief": "Cliente passando cartão no terminal",
+    "queries": [
+      "customer tapping card payment terminal",
+      "customer tapping card payment terminal close up",
+      "customer tapping card payment terminal footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_15",
+    "category": "retail",
+    "brief": "Sacola de compras sendo entregue ao cliente",
+    "queries": [
+      "cashier handing shopping bag customer",
+      "cashier handing shopping bag customer close up",
+      "cashier handing shopping bag customer footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_16",
+    "category": "clothing",
+    "brief": "Máquina costurando uma peça de roupa",
+    "queries": [
+      "sewing machine stitching garment",
+      "sewing machine stitching garment close up",
+      "sewing machine stitching garment footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_17",
+    "category": "clothing",
+    "brief": "Trabalhador cortando tecido com tesoura",
+    "queries": [
+      "worker cutting fabric scissors",
+      "worker cutting fabric scissors close up",
+      "worker cutting fabric scissors footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_18",
+    "category": "clothing",
+    "brief": "Mãos dobrando camisetas",
+    "queries": [
+      "hands folding t-shirts",
+      "hands folding t-shirts close up",
+      "hands folding t-shirts footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_19",
+    "category": "clothing",
+    "brief": "Algodão sendo colhido no campo",
+    "queries": [
+      "cotton harvesting field machine",
+      "cotton harvesting field machine close up",
+      "cotton harvesting field machine footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_20",
+    "category": "clothing",
+    "brief": "Fios sendo enrolados em bobinas",
+    "queries": [
+      "textile thread winding spools",
+      "textile thread winding spools close up",
+      "textile thread winding spools footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_21",
+    "category": "logistics",
+    "brief": "Empilhadeira carregando caixas",
+    "queries": [
+      "forklift lifting cardboard boxes",
+      "forklift lifting cardboard boxes close up",
+      "forklift lifting cardboard boxes footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_22",
+    "category": "logistics",
+    "brief": "Caminhão recebendo carga no depósito",
+    "queries": [
+      "loading cargo truck warehouse",
+      "loading cargo truck warehouse close up",
+      "loading cargo truck warehouse footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_23",
+    "category": "logistics",
+    "brief": "Pacotes passando por esteira",
+    "queries": [
+      "cardboard packages conveyor belt",
+      "cardboard packages conveyor belt close up",
+      "cardboard packages conveyor belt footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_24",
+    "category": "logistics",
+    "brief": "Contêiner sendo içado por guindaste",
+    "queries": [
+      "crane lifting shipping container",
+      "crane lifting shipping container close up",
+      "crane lifting shipping container footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_25",
+    "category": "logistics",
+    "brief": "Entregador colocando caixa na porta",
+    "queries": [
+      "delivery worker placing cardboard box doorstep",
+      "delivery worker placing cardboard box doorstep close up",
+      "delivery worker placing cardboard box doorstep footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_26",
+    "category": "technology",
+    "brief": "Mãos montando uma placa eletrônica",
+    "queries": [
+      "hands assembling circuit board",
+      "hands assembling circuit board close up",
+      "hands assembling circuit board footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_27",
+    "category": "technology",
+    "brief": "Técnico soldando componentes eletrônicos",
+    "queries": [
+      "technician soldering electronic components",
+      "technician soldering electronic components close up",
+      "technician soldering electronic components footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_28",
+    "category": "technology",
+    "brief": "Pessoa substituindo a bateria de um celular",
+    "queries": [
+      "technician replacing smartphone battery",
+      "technician replacing smartphone battery close up",
+      "technician replacing smartphone battery footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_29",
+    "category": "technology",
+    "brief": "Caminhão transportando minério em mina",
+    "queries": [
+      "mining truck hauling ore open pit",
+      "mining truck hauling ore open pit close up",
+      "mining truck hauling ore open pit footage"
+    ],
+    "duration": 4.0
+  },
+  {
+    "id": "case_30",
+    "category": "technology",
+    "brief": "Mãos separando lixo eletrônico",
+    "queries": [
+      "hands sorting electronic waste",
+      "hands sorting electronic waste close up",
+      "hands sorting electronic waste footage"
+    ],
+    "duration": 4.0
+  }
+]

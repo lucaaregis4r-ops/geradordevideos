@@ -117,6 +117,9 @@ class TestReviewManagerWorkflow:
         tmp_path, mgr = test_env
         folder = tmp_path / "projects" / "proj_qa"
         folder.mkdir(parents=True, exist_ok=True)
+        from PIL import Image
+        media_path = folder / "fixture.jpg"
+        Image.new("RGB", (1080, 1920), "blue").save(media_path)
 
         plan = ScenePlan(
             script_id="proj_qa",
@@ -133,6 +136,9 @@ class TestReviewManagerWorkflow:
                     duration_hint=4.0,
                     selected_media={
                         "asset_id": "asset_100",
+                        "local_path": str(media_path),
+                        "media_type": "image",
+                        "semantic_status": "reviewed",
                         "url": "http://example.com/video.mp4",
                         "author": "Diretor X",
                         "license": "Creative Commons",

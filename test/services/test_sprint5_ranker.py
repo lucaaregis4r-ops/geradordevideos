@@ -82,6 +82,7 @@ def test_semantic_ranker_composite_scoring(tmp_path: Path):
         duration=5.0,
         url="http://example.com/rel_port.mp4",
         semantic_score=0.92,
+        description="Pessoa empurrar carrinho cheio dificuldade massa",
     )
 
     c_irrelevant_landscape = MediaCandidate(
@@ -93,6 +94,7 @@ def test_semantic_ranker_composite_scoring(tmp_path: Path):
         duration=5.0,
         url="http://example.com/irrel_land.mp4",
         semantic_score=0.20,
+        description="tropical beach ocean sunset",
     )
 
     ranked = ranker.rank_candidates(
@@ -104,7 +106,8 @@ def test_semantic_ranker_composite_scoring(tmp_path: Path):
 
     assert ranked[0].asset_id == "rel_port"
     assert ranked[0].final_score > ranked[1].final_score
-    assert ranked[0].final_score >= 0.85
+    assert ranked[0].semantic_score >= 0.85
+    assert ranked[0].semantic_status == "metadata_only"
     assert ranked[1].final_score < 0.60
 
 

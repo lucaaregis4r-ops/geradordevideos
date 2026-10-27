@@ -397,10 +397,18 @@ elif selected_project_id:
                                         with st.spinner("Substituindo mídia..."):
                                             target_path = cand.get("local_path")
                                             if not target_path or not Path(target_path).exists():
-                                                from app.services.media_ranker.candidate_builder import _generate_synthetic_clip
-                                                gen_p = Path(f"storage/media_cache/swap_{scene.scene_id}_{c_idx}.mp4")
-                                                _generate_synthetic_clip(cand.get("query", scene.narration), gen_p)
-                                                target_path = str(gen_p)
+                                                from app.services.media_ranker.media_searcher import MediaSearcher
+                                                from app.services.media_ranker.schemas import MediaCandidate
+                                                parsed_candidate = MediaCandidate.from_dict(cand)
+                                                try:
+                                                    target_path = MediaSearcher()._download_candidate_asset(parsed_candidate)
+                                                except Exception as exc:
+                                                    st.error(f"Não foi possível obter este candidato: {exc}")
+                                                    st.stop()
+                                                cand = parsed_candidate.to_dict()
+                                                if not target_path:
+                                                    st.error("Download falhou; escolha outro candidato.")
+                                                    st.stop()
 
                                             manager.swap_scene_media(
                                                 project_id=selected_project_id,
@@ -435,6 +443,194 @@ elif selected_project_id:
                             st.rerun()
 
         st.divider()
+        st.markdown("### Recuperar cenas pendentes")
+        from app.services.review.recovery import diagnosis
+        diagnostic_rows = diagnosis(plan)
+        state_labels = {"missing": "Sem arquivo de mídia", "rejected": "Mídia rejeitada",
+                        "placeholder": "Imagem provisória", "review": "Precisa de revisão humana", "ready": "Revisada"}
+        pending_rows = [r for r in diagnostic_rows if r["state"] in {"missing", "rejected", "placeholder"}]
+        st.caption("A busca abaixo trata apenas mídias ausentes, rejeitadas ou provisórias. Áudio, narração e seleções existentes são preservados.")
+        st.dataframe([{"Cena": r["scene"], "Plano": r["beat"] or "cena", "Situação": state_labels[r["state"]],
+                       "Candidatos": r["candidates"], "Rejeições": str(r["rejections"])} for r in diagnostic_rows], hide_index=True)
+        recovery_limit = st.number_input("Planos por rodada", min_value=1, max_value=20, value=3)
+        if st.button(f"Pesquisar pendências ({len(pending_rows)})", disabled=not pending_rows):
+            recovery_progress = st.progress(0.0)
+            try:
+                report = manager.recover_pending_media(selected_project_id, limit=int(recovery_limit),
+                    on_progress=lambda message, fraction: recovery_progress.progress(fraction, text=message))
+                st.session_state[f"recovery_{selected_project_id}"] = report["results"]
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Busca interrompida ({type(exc).__name__}). Os planos concluídos foram salvos; recarregue para continuar.")
+        last_recovery = st.session_state.get(f"recovery_{selected_project_id}")
+        if last_recovery:
+            st.write("Última rodada")
+            st.dataframe(last_recovery, hide_index=True)
+
+        st.markdown("### Revisão por plano visual")
+        from app.services.assembly.planner import AssemblyPlanner
+        from app.services.assembly.media_mix import summarize_media_mix
+        mix = summarize_media_mix(AssemblyPlanner().build_plan(plan))
+        st.metric("Tempo com filmagem real", f"{mix['video_ratio']:.0%}")
+        if mix["below_target"]:
+            st.info("Meta editorial: pelo menos 65% do tempo com vídeos. Fotos animadas continuam contando como fotos. Use a busca de vídeos nos planos abaixo.")
+
+        for scene in plan.scenes:
+            targets = scene.visual_beats or [scene]
+            for target in targets:
+                beat_id = getattr(target, "beat_id", None)
+                key = f"{scene.scene_id}_{beat_id or 'scene'}"
+                selected = target.selected_media or {}
+                with st.expander(f"{key} — {selected.get('semantic_status', 'pending_media')}"):
+                    st.write(scene.narration)
+                    st.write(target.intent)
+                    from app.services.review.search_assistant import suggest_queries
+                    suggestions = suggest_queries(target.queries, getattr(target, "forbidden_elements", []))
+                    if suggestions:
+                        with st.expander("Sugestões de buscas — confira antes de aplicar"):
+                            st.dataframe(suggestions, hide_index=True)
+                            suggested = st.multiselect("Variações para acrescentar", [r["query"] for r in suggestions], key=f"suggestions_{key}")
+                            if st.button("Aplicar variações escolhidas", key=f"apply_suggestions_{key}"):
+                                combined = list(dict.fromkeys([*target.queries, *suggested]))
+                                if len(combined) > 5:
+                                    st.warning("O limite é de cinco buscas. Remova uma consulta existente no campo abaixo antes de acrescentar outras.")
+                                elif suggested:
+                                    if beat_id:
+                                        manager.update_beat_metadata(selected_project_id, scene.scene_id, beat_id, queries=combined)
+                                    else:
+                                        manager.update_scene_metadata(selected_project_id, scene.scene_id, queries=combined)
+                                    st.session_state.pop(f"queries_recovery_{key}", None)
+                                    st.rerun()
+                    query_text = st.text_area("Buscas concretas em inglês — uma por linha", value="\n".join(target.queries), key=f"queries_recovery_{key}")
+                    if st.button("Salvar buscas deste plano", key=f"save_queries_recovery_{key}"):
+                        import re
+                        queries = list(dict.fromkeys(q.strip() for q in query_text.splitlines() if q.strip()))
+                        if not 1 <= len(queries) <= 5 or any(re.search(r"\b(economy|market|wealth|value|capitalism|supply chain)\b", q, re.I) for q in queries):
+                            st.error("Use de uma a cinco buscas de objetos e ações físicas, evitando termos abstratos.")
+                        else:
+                            if beat_id:
+                                manager.update_beat_metadata(selected_project_id, scene.scene_id, beat_id, queries=queries)
+                            else:
+                                manager.update_scene_metadata(selected_project_id, scene.scene_id, queries=queries)
+                            st.rerun()
+                    rejected_candidates = [{"Fonte": c.get("provider"), "Descrição": c.get("description", ""),
+                                            "Relevância": c.get("semantic_score", 0),
+                                            "Situação": "Rejeitado / requer revisão" if c.get("error_detail") else c.get("semantic_status", "não verificado")}
+                                           for c in target.media_candidates]
+                    if rejected_candidates:
+                        st.dataframe(rejected_candidates, hide_index=True)
+
+                    attempts = getattr(target, "search_attempts", [])
+                    if attempts:
+                        with st.expander("Resultados por fonte"):
+                            labels = {"ok": "Encontrado", "empty_results": "Sem resultados",
+                                      "missing_credentials": "Sem chave configurada", "timeout": "Tempo limite",
+                                      "rate_limited": "Limite de consultas", "authentication_failed": "Credencial recusada",
+                                      "provider_error": "Fonte indisponível"}
+                            st.dataframe([{"Fonte": a.get("provider"),
+                                "Resultado": labels.get(a.get("status"), a.get("status")),
+                                "Candidatos": a.get("candidate_count", 0)} for a in attempts], hide_index=True)
+                    local = selected.get("local_path")
+                    if local and Path(local).is_file():
+                        if Path(local).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+                            st.image(local)
+                        else:
+                            st.video(local)
+                    st.caption(f"Origem: {selected.get('source_page', 'não informada')} | Intervalo: {selected.get('source_in', 0)}–{selected.get('source_out', 'fim')}")
+                    if target.media_candidates:
+                        with st.expander("Comparar dois candidatos lado a lado"):
+                            pair = st.multiselect("Escolha até dois candidatos", list(range(len(target.media_candidates))),
+                                max_selections=2, format_func=lambda i: f"{i+1} · {target.media_candidates[i].get('provider', '')} · {target.media_candidates[i].get('description') or target.media_candidates[i].get('asset_id', '')}", key=f"compare_{key}")
+                            if pair:
+                                for column, candidate_index in zip(st.columns(len(pair)), pair):
+                                    with column:
+                                        candidate = target.media_candidates[candidate_index]
+                                        st.caption(candidate.get("description") or "Sem descrição do provedor")
+                                        st.write(f"Fonte: {candidate.get('provider', '')} · Licença: {candidate.get('license_id') or 'não informada'}")
+                                        preview_key = f"candidate_preview_{selected_project_id}_{key}_{candidate.get('asset_id', '')}_{candidate_index}"
+                                        preview_path = st.session_state.get(preview_key) or candidate.get("local_path")
+                                        if preview_path and Path(preview_path).is_file():
+                                            if Path(preview_path).suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}:
+                                                st.image(preview_path)
+                                            else:
+                                                st.video(preview_path, start_time=float(candidate.get("source_in") or 0))
+                                        elif st.button("Carregar mídia para comparar", key=f"load_{preview_key}"):
+                                            try:
+                                                from app.services.media_ranker.media_searcher import MediaSearcher
+                                                from app.services.media_ranker.schemas import MediaCandidate
+                                                downloaded = MediaSearcher()._download_candidate_asset(MediaCandidate.from_dict(candidate))
+                                                if downloaded and Path(downloaded).is_file():
+                                                    st.session_state[preview_key] = downloaded
+                                                    st.rerun()
+                                                st.error("A fonte não forneceu um arquivo disponível.")
+                                            except Exception as exc:
+                                                st.error(f"Falha ao carregar ({type(exc).__name__}). A seleção da cena não foi alterada.")
+                                st.caption("Comparar não troca nem aprova a mídia. Use a seleção abaixo após assistir.")
+                    if selected.get("semantic_status") in {"reviewed", "visual_verified"}:
+                        with st.expander("Guardar mídia aprovada no acervo"):
+                            observed = st.text_input("O que aparece de fato na mídia", value=selected.get("description", ""), key=f"observed_{key}")
+                            observed_tags = st.text_input("Etiquetas visuais em inglês, separadas por vírgula", key=f"observed_tags_{key}")
+                            if st.button("Adicionar ao acervo reutilizável", key=f"curate_{key}"):
+                                from app.services.review.curation import curate_asset
+                                try:
+                                    curate_asset(selected, observed, observed_tags.split(","), manager.media_cache_dir)
+                                    st.success("Mídia adicionada. Ela poderá aparecer nas buscas de outras produções, com nova avaliação de pertinência.")
+                                except ValueError as exc:
+                                    st.error(str(exc))
+                    if beat_id:
+                        if target.media_candidates:
+                            choice = st.selectbox("Candidato", range(len(target.media_candidates)),
+                                format_func=lambda i: f"{target.media_candidates[i].get('media_type', 'video')} · {target.media_candidates[i].get('provider', '')}: {target.media_candidates[i].get('description') or target.media_candidates[i].get('asset_id', '')}",
+                                key=f"candidate_{key}")
+                            if st.button("Trocar este plano", key=f"swap_beat_{key}"):
+                                from app.services.media_ranker.media_searcher import MediaSearcher
+                                from app.services.media_ranker.schemas import MediaCandidate
+                                candidate = target.media_candidates[choice]
+                                candidate_path = candidate.get("local_path")
+                                if not candidate_path or not Path(candidate_path).is_file():
+                                    parsed_candidate = MediaCandidate.from_dict(candidate)
+                                    try:
+                                        candidate_path = MediaSearcher()._download_candidate_asset(parsed_candidate)
+                                    except Exception as exc:
+                                        st.error(f"Não foi possível obter este candidato: {exc}")
+                                        st.stop()
+                                    candidate = parsed_candidate.to_dict()
+                                if candidate_path:
+                                    manager.swap_beat_media(selected_project_id, scene.scene_id, beat_id, candidate_path, candidate)
+                                    st.rerun()
+                                else:
+                                    st.error("Download falhou. A seleção anterior foi preservada.")
+                        uploaded = st.file_uploader("Importar mídia para este plano", type=["mp4", "mov", "webm", "png", "jpg"], key=f"upload_beat_{key}")
+                        if uploaded and st.button("Aplicar mídia importada", key=f"apply_beat_{key}"):
+                            import hashlib
+                            digest = hashlib.sha256(uploaded.getbuffer()).hexdigest()[:20]
+                            destination = Path("storage/media_cache") / f"import_{digest}{Path(uploaded.name).suffix.lower()}"
+                            destination.write_bytes(uploaded.getbuffer())
+                            manager.swap_beat_media(selected_project_id, scene.scene_id, beat_id, destination,
+                                {"asset_id":f"import_{digest}", "provider":"local", "rights_status":"rights_unknown",
+                                 "media_type":"image" if destination.suffix in {".png", ".jpg"} else "video"})
+                            st.rerun()
+                        if st.button("Buscar vídeos para este plano", key=f"search_video_{key}"):
+                            manager.search_media_for_beat(selected_project_id, scene.scene_id, beat_id, prefer_video=True)
+                            st.rerun()
+                    source_url = st.text_input("Importar vídeo por link do Mixkit", key=f"source_url_{key}")
+                    if source_url and st.button("Importar vídeo do link", key=f"import_link_{key}"):
+                        try:
+                            manager.import_mixkit_for_beat(selected_project_id, scene.scene_id, beat_id, source_url)
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"Não foi possível importar: {exc}")
+                    reason = st.text_input("Motivo da avaliação", key=f"reason_{key}")
+                    if selected and st.button("Aprovar pertinência", key=f"approve_{key}"):
+                        manager.review_media(selected_project_id, scene.scene_id, beat_id, True, reason)
+                        st.rerun()
+                    if selected and st.button("Rejeitar pertinência", key=f"reject_{key}"):
+                        manager.review_media(selected_project_id, scene.scene_id, beat_id, False, reason)
+                        st.rerun()
+                    if beat_id and st.button("Refazer busca deste plano", key=f"search_{key}"):
+                        manager.search_media_for_beat(selected_project_id, scene.scene_id, beat_id)
+                        st.rerun()
+
         st.markdown("### 📜 Pacote de Direitos Autorais e Créditos")
         c_col1, c_col2 = st.columns(2)
         with c_col1:
@@ -475,9 +671,9 @@ elif selected_project_id:
                 st.caption(f"Arquivo: `{Path(latest_video).name}`")
                 with open(latest_video, "rb") as f:
                     st.download_button(
-                        "📥 Baixar Vídeo Masterizado (MP4)",
+                        "📥 Baixar Vídeo de Revisão (MP4)",
                         data=f,
-                        file_name=f"{selected_project_id}_final.mp4",
+                        file_name=f"{selected_project_id}_review.mp4",
                         mime="video/mp4",
                         type="primary",
                         use_container_width=True,
@@ -490,24 +686,14 @@ elif selected_project_id:
 
         with r_col2:
             st.markdown("#### ⚙️ Controle de Render")
-            enforce_qg = st.checkbox("Bloquear render se reprovado pelo Quality Gate", value=True)
-            allow_draft = st.checkbox("Permitir render de rascunho em caso de erro menor", value=False)
+            st.caption("A exportação exige aprovação do plano atual no Quality Gate.")
 
             if st.button("🔨 Renderizar Vídeo Completo Agora", type="primary", use_container_width=True):
                 with st.spinner("Sintetizando áudio EBU R128, gerando cards, compondo Ken Burns e renderizando vídeo..."):
                     from app.services.factory import ShortsFactory
                     factory = ShortsFactory()
-                    script_file = Path(f"storage/scripts/{selected_project_id}.md")
-                    script_text = script_file.read_text(encoding="utf-8") if script_file.exists() else " ".join(s.narration for s in plan.scenes)
-                    res = factory.produce_draft(
-                        script_id=selected_project_id,
-                        script_text=script_text,
-                        title=getattr(plan, "title", selected_project_id),
-                        channel=getattr(plan, "channel", "default"),
-                        brand_style=plan.brand_preset,
-                        enforce_quality_gate=enforce_qg,
-                        allow_unpassed_draft=allow_draft,
-                    )
+                    manager.evaluate_project_quality(selected_project_id)
+                    res = factory.render_existing_draft(selected_project_id)
                     if res.get("video_path"):
                         st.success("Render concluído com sucesso!")
                     else:

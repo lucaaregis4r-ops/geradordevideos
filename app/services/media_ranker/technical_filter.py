@@ -20,8 +20,8 @@ def score_technical_candidate(
     score = 0.5  # Base score
 
     # 1. Orientation & Aspect Ratio (weight: 0.30)
-    w = candidate.width or 1080
-    h = candidate.height or 1920
+    w = candidate.width or 0
+    h = candidate.height or 0
     ratio = w / h if h > 0 else 0.5625  # 9:16 = 0.5625
 
     if abs(ratio - 0.5625) < 0.05:
@@ -38,9 +38,9 @@ def score_technical_candidate(
         score += 0.0
 
     # 2. Resolution (weight: 0.15)
-    if h >= 1920 or w >= 1080:
+    if min(w, h * 9 / 16) >= 1080 and min(h, w * 16 / 9) >= 1920:
         score += 0.15
-    elif h >= 1280 or w >= 720:
+    elif min(w, h * 9 / 16) >= 720 and min(h, w * 16 / 9) >= 1280:
         score += 0.10
     else:
         score += 0.0
@@ -67,6 +67,7 @@ def rank_and_filter_candidates(
     candidates: List[MediaCandidate],
     target_duration: float = 4.0,
     top_k: int = 10,
+    prefer_video: bool = False,
 ) -> List[MediaCandidate]:
     """Scores all candidates technically and returns the top_k best candidates."""
     for c in candidates:
@@ -76,4 +77,12 @@ def rank_and_filter_candidates(
 
     # Sort descending by technical score
     sorted_candidates = sorted(candidates, key=lambda c: c.technical_score, reverse=True)
+    if prefer_video:
+        # Reserve room for actual footage, including unmeasured provider metadata.
+        # Do not let portrait photos eliminate landscape videos before semantics.
+        videos = [c for c in sorted_candidates if c.media_type == "video" and not c.is_synthetic
+                  and (c.duration <= 0 or c.duration >= target_duration)]
+        reserved = videos[:max(1, top_k // 2)]
+        ids = {id(c) for c in reserved}
+        return (reserved + [c for c in sorted_candidates if id(c) not in ids])[:top_k]
     return sorted_candidates[:top_k]
